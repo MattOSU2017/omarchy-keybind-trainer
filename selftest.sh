@@ -423,12 +423,28 @@ if [ "$LOCAL" = 1 ]; then
     && ok "menu row present" || no "menu row missing"
   [ -s "$HOME/.local/share/applications/omarchy-keybind-trainer.desktop" ] \
     && ok ".desktop entry present" || no ".desktop entry missing"
-  chk "a locally-defined binding is tagged Mine" \
-    "$(jq '[.[]|select(.category=="Mine" and .action=="Photo Gallery")]|length' "$DECK")" 1
-  chk "the stock Omarchy menu binding is NOT tagged Mine" \
-    "$(jq -r '.[]|select(.action=="Omarchy menu")|.category' "$DECK")" "System"
-  chk "SUPER+Q and SUPER+W merge into one Close window card" \
-    "$(jq -r '[.[]|select(.action=="Close window")|.keys[]]|sort|join(",")' "$DECK")" "SUPER + Q,SUPER + W"
+  # Stated as invariants rather than by naming particular bindings: this
+  # section used to assert one specific machine's tiles and overrides, which
+  # put that config in a public repo and made --local fail for everyone else.
+  M=$(jq '[.[]|select(.category=="Mine")]|length' "$DECK")
+  [ "$M" -gt 0 ] && ok "$M bindings of your own are tagged Mine" \
+                 || no "nothing tagged Mine - do you have bindings in ~/.config/hypr?"
+  # The comment-matching bug: a description defined upstream must not be
+  # claimed by a commented-out example in the user's own config.
+  chk "no upstream binding is claimed by a commented-out example" "$(python3 -c "
+import json, re, pathlib
+deck = json.load(open('$DECK'))
+p = pathlib.Path.home() / '.config/hypr/bindings.lua'
+commented = set()
+if p.is_file():
+    for line in p.read_text(errors='replace').splitlines():
+        if line.lstrip().startswith('--'):
+            m = re.search(r'o\.bind\(\s*\"[^\"]*\"\s*,\s*\"([^\"]+)\"', line)
+            if m: commented.add(m.group(1))
+print(len([c for c in deck if c['action'] in commented and c['category'] == 'Mine']))")" "0"
+  # Aliases merge whatever they happen to be here.
+  chk "no description produces two cards" \
+    "$(jq '[.[].action]|length - (unique|length)' "$DECK")" 0
   # Since the standalone release, install.sh owns these files and chezmoi does
   # not. Two owners for one file is exactly the drift this suite exists to
   # catch, so tracking them again would be the regression.
