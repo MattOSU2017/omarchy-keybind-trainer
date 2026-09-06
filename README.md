@@ -184,6 +184,17 @@ invariants, category attribution, the same-origin guard, the heartbeat
 detecting a binding restored underneath it, every installed theme's contrast
 floors, and each crash-recovery layer.
 
+## Support, honestly
+
+A hobby project, shared because it might save someone else the same trouble.
+Issues and Discussions are open and I read them, but I may be slow and I make
+no promises — please don't wait on me. It's MIT: fork it, change it, ship your
+own version.
+
+Bug reports are genuinely welcome, particularly anything about a binding not
+being restored. There are five layers meant to stop that, and if you ever find
+one that gets past all of them I want to know.
+
 ## Licence
 
 MIT.
