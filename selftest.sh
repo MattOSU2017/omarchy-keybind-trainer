@@ -136,6 +136,70 @@ from importlib.machinery import SourceFileLoader
 m = SourceFileLoader('t','$BIN').load_module()
 print('ok' if m.norm_combo('shift + super+A') == m.norm_combo('SUPER+SHIFT+a') == 'SUPER + SHIFT + A' else 'bad')")" "ok"
 
+# ---------------------------------------------------------------- grammar
+echo "== grammar =="
+# The grammar must be DERIVED from whatever config it is handed. These checks
+# feed it synthetic decks, so they fail if anyone ever hardcodes this author's
+# keybindings into the rules.
+chk "a modifier's meaning is read from the deck, not hardcoded" "$(python3 -c "
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader('t','$BIN').load_module()
+deck = [{'keys':['SUPER + CTRL + '+c],'action':'X','category':'Media'} for c in 'ABCDE']
+r = m.derive_grammar(deck)
+print('ok' if r.get('SUPER + CTRL',{}).get('label')=='media and hardware keys' else 'bad '+str(r))")" "ok"
+chk "a mixed modifier set earns no rule" "$(python3 -c "
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader('t','$BIN').load_module()
+cats = ['Apps','Windows','System','Media','Clipboard']
+deck = [{'keys':['SUPER + ALT + '+c],'action':'X','category':k} for c,k in zip('ABCDE',cats)]
+print('ok' if 'SUPER + ALT' not in m.derive_grammar(deck) else 'bad')")" "ok"
+chk "too few bindings is a coincidence, not a rule" "$(python3 -c "
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader('t','$BIN').load_module()
+deck = [{'keys':['SUPER + ALT + '+c],'action':'X','category':'Apps'} for c in 'AB']
+print('ok' if not m.derive_grammar(deck) else 'bad')")" "ok"
+chk "'Mine' never wins a modifier's meaning" "$(python3 -c "
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader('t','$BIN').load_module()
+deck = [{'keys':['SUPER + SHIFT + '+c],'action':'X','category':'Mine'} for c in 'ABCDEFG']
+deck += [{'keys':['SUPER + SHIFT + '+c],'action':'X','category':'Apps'} for c in 'HIJ']
+r = m.derive_grammar(deck).get('SUPER + SHIFT',{})
+print('ok' if r.get('label')=='launch an app' else 'bad '+str(r))")" "ok"
+chk "modifiers are named in binding order, not alphabetical" "$(python3 -c "
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader('t','$BIN').load_module()
+print(m.canonical_mods({'SHIFT','SUPER','CTRL','ALT'}))")" "SUPER + CTRL + ALT + SHIFT"
+chk "a variant needs a shared word, not just a shared key" "$(python3 -c "
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader('t','$BIN').load_module()
+deck = [{'keys':['SUPER + SHIFT + B'],'action':'Browser','category':'Apps'},
+        {'keys':['SUPER + ALT + SHIFT + B'],'action':'Browser (private)','category':'Apps'},
+        {'keys':['SUPER + CTRL + ALT + B'],'action':'Bluetooth','category':'System'}]
+m.annotate_grammar(deck)
+linked = deck[1]['why']['variant'] is not None
+unlinked = deck[2]['why']['variant'] is None
+print('ok' if linked and unlinked else f'bad {linked} {unlinked}')")" "ok"
+chk "the letter link finds the word it stands for" "$(python3 -c "
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader('t','$BIN').load_module()
+print('ok' if m.letter_link('G','Photo Gallery')=='Gallery'
+      and m.letter_link('W','WhatsApp')=='WhatsApp'
+      and m.letter_link('G','WhatsApp') is None else 'bad')")" "ok"
+chk "a binding with no link at all is flagged as arbitrary" "$(python3 -c "
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader('t','$BIN').load_module()
+deck = [{'keys':['SUPER + SHIFT + Q'],'action':'Telegram','category':'Apps'}]
+m.annotate_grammar(deck)
+print('ok' if deck[0]['why']['odd'] else 'bad')")" "ok"
+# On the live deck: every card carries a why, and the flagged set is a small
+# minority. If most of the deck is "arbitrary" the derivation has broken.
+chk "every card carries an explanation" \
+  "$(jq '[.[]|select(.why==null)]|length' "$DECK")" 0
+ODD=$(jq '[.[]|select(.why.odd)]|length' "$DECK")
+TOT=$(jq 'length' "$DECK")
+if [ "$ODD" -lt $((TOT / 3)) ]; then ok "$ODD of $TOT bindings are genuinely arbitrary"
+else no "$ODD of $TOT flagged arbitrary - the grammar derivation is not working"; fi
+
 # ---------------------------------------------------------------- suspend
 echo "== suspend / restore round-trip =="
 # On a scratch binding this suite creates, so no binding of yours is touched.

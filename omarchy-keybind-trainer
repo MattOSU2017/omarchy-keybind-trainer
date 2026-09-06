@@ -491,6 +491,7 @@ def build_deck(with_status=False):
         deck.append(card)
 
     deck.sort(key=lambda c: (c["category"], c["action"]))
+    annotate_grammar(deck)
     if not with_status:
         return deck
 
@@ -506,6 +507,168 @@ def build_deck(with_status=False):
     else:
         status = None
     return deck, status
+
+
+# --------------------------------------------------------------------------
+# Grammar: why a binding is the key it is
+# --------------------------------------------------------------------------
+#
+# Most keybindings are not arbitrary, they only look that way one at a time.
+# The letter usually stands for the action, and the modifiers usually sort
+# bindings into groups - but nothing ever tells you that, so drilling them
+# feels like memorising unrelated facts.
+#
+# All of this is DERIVED from whatever config it is given. Nothing here is a
+# table of this author's keybindings: the modifier meanings come from the
+# categories the user's own bindings fall into, and the rest is structural.
+# A config organised differently produces different rules; a config with no
+# system at all produces none, and says so.
+
+# Phrasings for the categories Omarchy ships. An unknown category still works,
+# it just gets named rather than described.
+MOD_PHRASES = {
+    "Apps": "launch an app",
+    "Windows": "manage the window in front of you",
+    "System": "a system setting or toggle",
+    "Media": "media and hardware keys",
+    "Clipboard": "the clipboard",
+    "Dictation": "dictation",
+}
+GRAMMAR_MIN_CARDS = 4        # below this a "pattern" is a coincidence
+GRAMMAR_STRONG = 0.75        # "SUPER+CTRL = a system setting"
+GRAMMAR_WEAK = 0.55          # "SUPER+SHIFT is usually: launch an app"
+
+# Words too common to mean two actions are related. Without this, "Toggle
+# window floating" and "Toggle window split" look like variants of each other.
+LINK_STOPWORDS = {
+    "toggle", "show", "hide", "open", "close", "move", "switch", "set",
+    "window", "windows", "workspace", "active", "last", "next", "previous",
+    "all", "new", "up", "down", "left", "right", "the", "a", "an", "and",
+    "to", "of", "on", "off", "in", "out", "my", "your", "menu", "precise",
+}
+
+
+def significant_words(text):
+    return {w.lower() for w in re.findall(r"[A-Za-z]+", text or "")
+            if w.lower() not in LINK_STOPWORDS}
+
+
+def canonical_mods(mods):
+    """SUPER + CTRL + ALT + SHIFT order, the way bindings are written."""
+    return " + ".join(name for _, name in MODBITS if name in mods)
+
+
+def mods_of(combo):
+    parts = combo.split(" + ")
+    return frozenset(parts[:-1]), parts[-1]
+
+
+def letter_link(key, action):
+    """The word in `action` that the key letter stands for, or None."""
+    if len(key) != 1 or not key.isalpha():
+        return None
+    for word in re.findall(r"[A-Za-z]+", action):
+        if word.lower().startswith(key.lower()):
+            return word
+    return None
+
+
+def derive_grammar(deck):
+    """What each modifier combination tends to mean, on THIS machine.
+
+    A modifier set earns a meaning when enough of its bindings agree on a
+    category. "Mine" is excluded from the vote: it records who wrote a binding,
+    not what it does, and letting it win would tell the user that SUPER+SHIFT
+    means "yours" when it actually means "launch an app".
+    """
+    # Only letter keys vote. "Which modifier was it?" is a question people ask
+    # about SUPER+SHIFT+E, never about an arrow key or a workspace number, and
+    # letting those in dilutes every rule: SUPER+SHIFT reads as 52% apps with
+    # them and 100% without, because the collapsed "move window to workspace N"
+    # cards drag it sideways.
+    buckets = {}
+    for card in deck:
+        mods, key = mods_of(card["keys"][0])
+        if len(key) == 1 and key.isalpha():
+            buckets.setdefault(mods, []).append(card["category"])
+
+    rules = {}
+    for mods, cats in buckets.items():
+        # The bare no-modifier group is the laptop function row, not a family.
+        if not mods or len(cats) < GRAMMAR_MIN_CARDS:
+            continue
+        semantic = [c for c in cats if c != "Mine"]
+        name = canonical_mods(mods)
+        if not semantic:
+            rules[name] = {"label": "your own additions", "share": 1.0,
+                           "n": len(cats), "strong": True}
+            continue
+        top = max(set(semantic), key=semantic.count)
+        share = semantic.count(top) / len(semantic)
+        if share < GRAMMAR_WEAK:
+            continue        # genuinely mixed - claiming a rule would be a lie
+        rules[name] = {"label": MOD_PHRASES.get(top, top),
+                       "share": round(share, 2), "n": len(cats),
+                       "strong": share >= GRAMMAR_STRONG}
+    return rules
+
+
+def annotate_grammar(deck):
+    """Attach to each card why it is the key it is - or say that it is not.
+
+    Three independent signals, any of which turns a random-looking fact into
+    part of a pattern:
+
+      letter   the key stands for a word in the action ("G for Gallery")
+      family   the modifier set has a consistent meaning here
+      variant  the same key with fewer modifiers holds a related binding,
+               so this one is the "other" thing on that key
+
+    A card with neither a letter nor a variant link is genuinely arbitrary.
+    Those are the ones worth inventing a mnemonic for, and there are usually
+    far fewer of them than it feels like.
+    """
+    rules = derive_grammar(deck)
+
+    by_key = {}
+    for card in deck:
+        for combo in card["keys"]:
+            mods, key = mods_of(combo)
+            by_key.setdefault(key, []).append((mods, combo, card))
+
+    for card in deck:
+        mods, key = mods_of(card["keys"][0])
+        family = rules.get(canonical_mods(mods))
+        letter = letter_link(key, card["action"])
+
+        # The same key with strictly fewer modifiers, but ONLY when the two
+        # actions actually name the same thing - "Browser" and "Browser
+        # (private)", "Email" and "New email". Category alone was too loose: it
+        # explained "Photo Gallery" as a variant of "Toggle window grouping",
+        # which is true structurally and useless to a human. If nothing links
+        # them, saying nothing is the honest answer, and the card gets flagged
+        # as one worth a mnemonic instead.
+        variant = None
+        best = -1
+        mine_words = significant_words(card["action"])
+        for other_mods, other_combo, other in by_key.get(key, []):
+            if other is card or not other_mods < mods:
+                continue
+            if not (mine_words & significant_words(other["action"])):
+                continue
+            if len(other_mods) > best:
+                best, variant = len(other_mods), {"combo": other_combo,
+                                                  "action": other["action"]}
+
+        card["why"] = {
+            "letter": letter,
+            "family": family["label"] if family else None,
+            "variant": variant,
+            # Arbitrary for this user: nothing about the key says what it does.
+            "odd": letter is None and variant is None and len(key) == 1
+                   and key.isalpha(),
+        }
+    return rules
 
 
 def active_combos():
@@ -810,7 +973,8 @@ def make_handler():
                 except HyprError as e:
                     deck, status = [], str(e)
                 boot = json.dumps({"deck": deck, "palette": theme_colors(),
-                                   "status": status})
+                                   "status": status,
+                                   "grammar": derive_grammar(deck)})
                 # json.dumps does not escape "<", so a description containing
                 # </script> would break out of the boot block.
                 boot = boot.replace("</", "<\\/")

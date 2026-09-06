@@ -69,6 +69,16 @@ h1.big em{font-style:normal;color:var(--muted);font-weight:600}
 .warnrow{display:flex;align-items:center;gap:13px;background:var(--warn-bg);
   color:var(--warn-ink);border-radius:20px;padding:15px 22px;font-size:13.5px;
   font-weight:600;flex:none}
+.grow-rule{display:flex;align-items:baseline;gap:10px;padding:7px 0;font-size:13px}
+.grow-rule .mods{font-family:var(--mono);font-size:11.5px;font-weight:700;
+  color:var(--accent);white-space:nowrap}
+.grow-rule .means{color:var(--fg);flex:1}
+.grow-rule .conf{font-size:10.5px;color:var(--faint);white-space:nowrap}
+.why{margin-top:10px;padding-top:9px;border-top:1px solid var(--track);
+  font-size:12.5px;color:var(--muted);line-height:1.5}
+.why b{color:var(--fg);font-weight:600}
+.why .mono{font-family:var(--mono);font-size:11.5px;color:var(--accent)}
+.why.odd b{color:var(--warn-ink)}
 #banner{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:50;
   max-width:min(720px,calc(100vw - 36px));box-shadow:var(--e2)}
 #bootfail{max-width:620px;margin:18vh auto;padding:28px 32px;background:var(--card);
@@ -193,6 +203,11 @@ kbd.big{font-size:clamp(17px,2vw,24px);min-width:3em;padding:.52em .86em;border-
       </div>
     </div>
     <div class="colR">
+      <div class="card" id="grammarCard">
+        <span class="h">Your keyboard has a grammar</span>
+        <div class="rows" id="grammarList"></div>
+        <p class="hint" id="grammarNote"></p>
+      </div>
       <div class="card" id="dueCard">
         <span class="h">Due for another look</span>
         <div class="rows" id="dueList"></div>
@@ -428,6 +443,39 @@ cats.forEach(c=>chosenCats.add(c));
 document.getElementById('deckInfo').textContent =
   `${DECK.length} bindings · ${DECK.filter(c=>c.live).length} pressable · read from hyprctl on every launch`;
 
+const GRAMMAR = BOOT.grammar || {};
+
+function paintGrammar(){
+  // Everything here is derived from the user's own bindings at page load - it
+  // is a description of their config, not a lesson about Omarchy's defaults.
+  const rows = Object.entries(GRAMMAR)
+    .sort((a,b)=> b[1].n - a[1].n)
+    .map(([mods,r])=>
+      `<div class="grow-rule"><span class="mods">${esc(mods)}</span>
+         <span class="means">${r.strong?'':'usually '}${esc(r.label)}</span>
+         <span class="conf">${Math.round(r.share*100)}% of ${r.n}</span></div>`);
+  const odd = DECK.filter(c=>c.why && c.why.odd).length;
+  const card = document.getElementById('grammarCard');
+  if (!rows.length){
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  document.getElementById('grammarList').innerHTML = rows.join('');
+  document.getElementById('grammarNote').innerHTML = odd
+    ? `Read off your live config. Only <b>${odd}</b> of ${DECK.length} bindings
+       have no pattern at all — those are the ones actually worth memorising.
+       <button class="chipbtn" style="margin:9px 0 0" onclick="drillOdd()">Drill those ${odd}</button>`
+    : 'Read off your live config, not a preset.';
+}
+
+function drillOdd(){
+  const odd = DECK.filter(c=>c.why && c.why.odd);
+  if (!odd.length) return;
+  length = 0;                       // all of them, however few
+  return startSession(odd, true);
+}
+
 function chipRow(el, items, isOn, onClick){
   el.innerHTML='';
   items.forEach(it=>{
@@ -474,6 +522,7 @@ async function paintStart(){
      <span class="acc">${r.v.right}/${r.v.seen}</span></div>`).join('');
 }
 paintStart();
+paintGrammar();
 
 /* ---------- session ---------- */
 async function startSession(pool, allowShort){
@@ -732,9 +781,38 @@ function judge(card, ok, pressed, chosen){
   v.className = `verdict ${ok?'ok':'bad'}`;
   v.innerHTML = `<h3>${ok?'Correct':'Missed'}</h3>`
               + (note?`<p>${note}</p>`:'')
+              + whyLine(card)
               + `<div class="go-on">Enter to continue</div>`;
   paintRail();
   if (ok) setTimeout(()=>{ if(answered) advance(); }, 950);
+}
+
+function whyLine(card){
+  // Turns "another random fact" into "part of a pattern" - or says plainly
+  // that there is no pattern, which is the useful answer for the handful that
+  // really are arbitrary.
+  const w = card.why;
+  if (!w) return '';
+  const combo = displayCombo(card);
+  const mods = combo.includes(' + ') ? combo.slice(0, combo.lastIndexOf(' + ')) : '';
+  const key  = combo.slice(combo.lastIndexOf(' + ') + 3);
+  const bits = [];
+  // Carry the same hedge the grammar panel shows. A 67% rule stated flatly
+  // claims SUPER "means" window management even on the card in front of you
+  // that is Universal paste.
+  const g = GRAMMAR[mods];
+  if (w.family && mods) bits.push(`<span class="mono">${esc(mods)}</span> =
+      ${g && !g.strong ? 'usually ' : ''}${esc(w.family)}`);
+  if (w.letter) bits.push(`<b>${esc(key)}</b> for <b>${esc(w.letter)}</b>`);
+  if (w.variant) bits.push(`the other <span class="mono">${esc(key)}</span> —
+      <span class="mono">${esc(w.variant.combo)}</span> is ${esc(w.variant.action)}`);
+  // "odd" is about the KEY, not the modifiers, so it stands alongside a family
+  // rule rather than instead of it: knowing SUPER+ALT+SHIFT launches an app
+  // still leaves you no reason why this one is G.
+  if (w.odd) bits.push(`nothing links <b>${esc(key)}</b> to
+      <b>${esc(card.action)}</b> — worth your own hook`);
+  if (!bits.length) return '';
+  return `<div class="why${w.odd?' odd':''}">${bits.join(' &nbsp;·&nbsp; ')}</div>`;
 }
 
 function advance(){ idx++; nextQuestion(); }
@@ -838,7 +916,7 @@ async function resetProgress(){
 function show(id){
   ['start','quiz','results','stats'].forEach(s=>
     document.getElementById(s).classList.toggle('hidden', s!==id));
-  if (id==='start') paintStart();
+  if (id==='start'){ paintStart(); paintGrammar(); }
 }
 function home(){ clearInterval(timer); show('start'); }
 async function restoreNow(){

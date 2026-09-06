@@ -44,6 +44,51 @@ session, and your stats persist in
 `~/.local/state/omarchy/keybind-trainer/progress.json` — plain JSON you can
 read, grep or delete.
 
+## It teaches the pattern, not 200 unrelated facts
+
+Keybindings feel arbitrary one at a time. Mostly they aren't — the letter
+usually stands for the action and the modifiers usually sort bindings into
+groups — but nothing ever tells you that, so drilling them feels like rote
+memorisation.
+
+So the drill reads the pattern **out of your own config** and shows it. On the
+start screen you get your keyboard's grammar:
+
+```
+SUPER + CTRL          a system setting or toggle        76% of 21
+SUPER + SHIFT         launch an app                    100% of 17
+SUPER                 usually manage the window …       67% of 13
+SUPER + ALT + SHIFT   launch an app                    100% of 7
+```
+
+and after every answer, one line saying why that key:
+
+> `SUPER + ALT + SHIFT` = launch an app · **B** for **Browser** · the other `B` — `SUPER + SHIFT + B` is Browser
+
+Nothing here is a table of anyone's keybindings. Three signals, all derived:
+
+- **letter** — the key starts a word in the action ("G for Gallery")
+- **family** — that modifier set's bindings mostly share a category, so it has
+  a consistent meaning on *your* machine
+- **variant** — the same key with fewer modifiers holds a related binding, and
+  the two actions actually name the same thing. "Browser" and "Browser
+  (private)" qualify; "Photo Gallery" and "Toggle window grouping" don't, so
+  that link is not offered.
+
+A config organised differently produces different rules. A config with no
+system produces none and says so — and rules are hedged by how well they hold,
+so a 67% pattern is reported as "usually", never as fact. Only letter keys vote
+on a modifier's meaning, because "which modifier was it?" is a question about
+`SUPER+SHIFT+E`, never about an arrow key.
+
+**Then it tells you the ones that really are arbitrary.** A binding whose key
+has no letter link and no variant link gets flagged, and the start screen
+offers to drill just those. On the author's 193-card deck that is **20 cards** —
+the ones worth inventing a hook for, instead of treating all 193 as random.
+
+It doubles as a config review: a binding that breaks your own pattern is
+sometimes better rebound than memorised.
+
 ## Your keyboard is never left broken
 
 This is the part that has to be right, because the failure mode is *"my
