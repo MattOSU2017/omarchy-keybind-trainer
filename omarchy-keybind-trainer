@@ -1,0 +1,1065 @@
+#!/usr/bin/env python3
+"""omarchy-keybind-trainer - drill your Hyprland keybindings for real.
+
+Reads the live binding set from `hyprctl binds`, serves a browser game on
+loopback, and temporarily unbinds whichever binding is being tested so the
+keystroke falls through to the browser instead of firing the action.
+
+See ~/Projects/Omarchy_config/keybinding-trainer/README.md.
+"""
+
+import argparse
+import atexit
+import http.server
+import json
+import os
+import random
+import re
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+HOME = Path.home()
+SIGNATURE = "omarchy-keybind-trainer"
+
+
+def _xdg(var, default):
+    v = os.environ.get(var, "").strip()
+    return Path(v) if v.startswith("/") else HOME / default
+
+
+STATE_DIR = _xdg("XDG_STATE_HOME", ".local/state") / "omarchy/keybind-trainer"
+PROGRESS = STATE_DIR / "progress.json"
+MARKER = STATE_DIR / "suspended"      # exists only while bindings are down
+ERRLOG = STATE_DIR / "last-error.log"
+DEADMAN = "omarchy-keybind-trainer-restore"   # transient systemd dead-man switch
+
+# `app.html` and the theme resolver ship beside this script in the released
+# repo, so a clone runs without being installed. The script's own directory is
+# searched first: an installed copy must never silently pick up a stale one
+# from a development $HOME.
+_HERE = Path(__file__).resolve().parent
+DATA_DIRS = [_HERE,
+             _xdg("XDG_DATA_HOME", ".local/share") / "omarchy-keybind-trainer",
+             Path("/usr/local/share/omarchy-keybind-trainer"),
+             Path("/usr/share/omarchy-keybind-trainer")]
+LIB_DIRS = [_HERE,
+            HOME / ".local/lib/omarchy",
+            Path("/usr/local/lib/omarchy"),
+            Path("/usr/lib/omarchy")]
+
+DEFAULT_PORT = 8477
+IDLE_TIMEOUT = 90          # seconds without a heartbeat before we restore and exit
+SUSPEND_TTL = 600          # how long the dead-man waits before assuming a crash
+DEADMAN_REARM = 120        # re-arm the dead-man at most this often, in seconds
+PORT = DEFAULT_PORT        # replaced by serve() once a port is settled on
+
+
+def find_data(name):
+    for d in DATA_DIRS:
+        p = d / name
+        if p.is_file():
+            return p
+    return None
+
+
+def log_error(msg):
+    """Startup failures are otherwise invisible: `daemonize()` sends stderr to
+    /dev/null, so a launch from the menu just silently does nothing."""
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        ERRLOG.write_text(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {msg}\n")
+    except OSError:
+        pass
+    print(f"omarchy-keybind-trainer: {msg}", file=sys.stderr)
+
+
+# A neutral dark palette, used when the theme resolver is unavailable or the
+# active theme cannot be read. Never fatal: the drill's safety paths - and
+# `--restore` above all - must work with nothing else installed.
+FALLBACK_PALETTE = {
+    "page": "#0d0f14", "card": "#151922", "sunk": "#1c212c", "track": "#272d3a",
+    "fg": "#e6e9ef", "muted": "#98a0b0", "faint": "#6a7284",
+    "accent": "#7aa2f7", "on-accent": "#0d0f14",
+    "ok": "#79d18c", "on-ok": "#0d0f14", "ok-bg": "#17291d",
+    "bad": "#e2687d", "on-bad": "#0d0f14", "bad-bg": "#2b1a20",
+    "warn": "#d5a04a", "on-warn": "#0d0f14", "warn-bg": "#2b241a",
+    "warn-ink": "#d9b880",
+    "key": "#272d3a", "key-hi": "#38404f", "key-skirt": "#080a0e",
+    "key-shadow": "rgba(0,0,0,0.45)",
+    "e1": "0 1px 2px rgba(0,0,0,0.30), 0 8px 22px rgba(0,0,0,0.34)",
+    "e2": "0 2px 4px rgba(0,0,0,0.34), 0 18px 40px rgba(0,0,0,0.42)",
+}
+
+_theme_fn = None
+
+
+def theme_colors():
+    """Active Omarchy theme as a UI palette, or the fallback.
+
+    The resolver is shared with `omarchy-catalog`, loaded lazily and by path
+    rather than by `sys.path` injection, and every failure degrades to the
+    fallback instead of raising - a missing or broken theme must not be able
+    to take down the page, the heartbeat, or the restore path.
+    """
+    global _theme_fn
+    if _theme_fn is None:
+        _theme_fn = _load_theme_fn() or False
+    if not _theme_fn:
+        return dict(FALLBACK_PALETTE)
+    try:
+        palette = _theme_fn()
+    except Exception:
+        return dict(FALLBACK_PALETTE)
+    if not isinstance(palette, dict) or not palette:
+        return dict(FALLBACK_PALETTE)
+    merged = dict(FALLBACK_PALETTE)
+    merged.update({k: v for k, v in palette.items() if isinstance(v, str) and v})
+    return merged
+
+
+def _load_theme_fn():
+    import importlib.util
+    for d in LIB_DIRS:
+        p = d / "omarchy_theme.py"
+        if not p.is_file():
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location("omarchy_theme", p)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod.theme_colors
+        except Exception:
+            continue
+    return None
+
+# Hyprland modmask bits, in the order Omarchy writes them in bindings.lua
+# ("SUPER + CTRL + ALT + O", "SUPER + SHIFT + A").
+MODBITS = ((64, "SUPER"), (4, "CTRL"), (8, "ALT"), (1, "SHIFT"))
+
+# Where each binding is defined -> the category shown in the game.
+CATEGORY_SOURCES = [
+    (HOME / ".config/hypr", "Mine"),
+    (Path("/usr/share/omarchy/default/hypr/bindings"), None),   # None = use file stem
+    (Path("/usr/share/omarchy/default/hypr/apps"), "Apps"),
+]
+CATEGORY_LABELS = {
+    "applications": "Apps",
+    "tiling": "Windows",
+    "utilities": "System",
+    "clipboard": "Clipboard",
+    "media": "Media",
+    "voxtype": "Dictation",
+}
+
+# Hyprland key name -> KeyboardEvent.code. Anything unmapped becomes a
+# multiple-choice-only card rather than a live-fire one.
+KEYCODE_MAP = {
+    "RETURN": "Enter", "SPACE": "Space", "TAB": "Tab", "ESCAPE": "Escape",
+    "BACKSPACE": "Backspace", "DELETE": "Delete", "PRINT": "PrintScreen",
+    "COMMA": "Comma", "PERIOD": "Period", "MINUS": "Minus", "EQUAL": "Equal",
+    "SLASH": "Slash", "BACKSLASH": "Backslash", "SEMICOLON": "Semicolon",
+    "APOSTROPHE": "Quote", "GRAVE": "Backquote",
+    "BRACKETLEFT": "BracketLeft", "BRACKETRIGHT": "BracketRight",
+    "LEFT": "ArrowLeft", "RIGHT": "ArrowRight", "UP": "ArrowUp", "DOWN": "ArrowDown",
+    "HOME": "Home", "END": "End", "PRIOR": "PageUp", "NEXT": "PageDown",
+    "INSERT": "Insert", "CAPS_LOCK": "CapsLock",
+}
+# X11 keycodes 79-91 are the keypad. Those bindings are duplicates of the
+# number-row workspace ones and would otherwise survive the `KP_` name filter.
+KEYPAD_CODES = range(79, 92)
+
+# `code:NN` bindings are X11 keycodes (evdev + 8).
+XKEYCODE_MAP = {
+    10: "Digit1", 11: "Digit2", 12: "Digit3", 13: "Digit4", 14: "Digit5",
+    15: "Digit6", 16: "Digit7", 17: "Digit8", 18: "Digit9", 19: "Digit0",
+    20: "Minus", 21: "Equal", 34: "BracketLeft", 35: "BracketRight",
+    # F13-F24 (evdev 183-194). Omarchy binds SUPER+SHIFT+F23 to the menu; on
+    # this keymap that level-2 symbol is XF86Assistant - the assistant key
+    # modern keyboards send.
+    191: "F13", 192: "F14", 193: "F15", 194: "F16", 195: "F17", 196: "F18", 197: "F19", 198: "F20", 199: "F21", 200: "F22", 201: "F23", 202: "F24",
+}
+
+# Never ask the user to physically press these, even if the unbind verifies.
+# Locking, powering off or closing every window is not something a mistimed
+# press should be able to reach - and the window for a mistimed press is real,
+# because Hyprland can restore a binding underneath a question (see Suspender).
+#
+# This is a policy on the *description*, not a list of combos: a hardcoded
+# combo list only protects the config it was written against, and anyone who
+# binds lock to something else would be asked to press it for real.
+LIVE_FIRE_DENY = {"CTRL + ALT + DELETE"}
+LIVE_FIRE_DENY_RE = re.compile(
+    r"\b(lock|log ?out|sign ?out|suspend|hibernate|reboot|restart|"
+    r"shut ??down|power|close all|exit)\b", re.I)
+
+
+def denied(combo, description):
+    return combo in LIVE_FIRE_DENY or bool(LIVE_FIRE_DENY_RE.search(description or ""))
+
+# Families that are one fact repeated N times. Collapsed to a single card.
+NUMERIC_FAMILIES = [
+    (re.compile(r"^Switch to workspace (\d+)$"), "Switch to workspace N", "N"),
+    (re.compile(r"^Move window to workspace (\d+)$"), "Move window to workspace N", "N"),
+    (re.compile(r"^Move window silently to workspace (\d+)$"),
+     "Move window silently to workspace N", "N"),
+    (re.compile(r"^Bar panel (\d+)$"), "Bar panel N", "N"),
+]
+
+
+# --------------------------------------------------------------------------
+# Reading the live binding set
+# --------------------------------------------------------------------------
+
+class HyprError(RuntimeError):
+    """hyprctl is missing, or there is no Hyprland to talk to."""
+
+
+def hyprctl(*args, check=False):
+    try:
+        r = subprocess.run(["hyprctl", *args], capture_output=True, text=True, timeout=10)
+    except FileNotFoundError:
+        if check:
+            raise HyprError("hyprctl is not installed - this drill needs Hyprland.")
+        return ""
+    except (OSError, subprocess.TimeoutExpired) as e:
+        if check:
+            raise HyprError(f"hyprctl failed: {e}")
+        return ""
+    # A non-zero exit puts its complaint on stderr and leaves stdout empty,
+    # which used to read as "no keybindings" rather than "no compositor".
+    if r.returncode != 0:
+        if check:
+            detail = (r.stderr or r.stdout or "").strip().splitlines()
+            raise HyprError(f"hyprctl {' '.join(args)}: "
+                            f"{detail[0] if detail else f'exit {r.returncode}'}")
+        return ""
+    return r.stdout
+
+
+def parse_binds():
+    """Parse `hyprctl binds` into a list of dicts."""
+    text = hyprctl("binds", check=True)
+    recs, cur = [], None
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if not line.startswith(("\t", " ")):
+            if cur:
+                recs.append(cur)
+            cur = {"_type": line.strip()}
+        elif cur is not None:
+            k, _, v = line.strip().partition(":")
+            cur[k.strip()] = v.strip()
+    if cur:
+        recs.append(cur)
+    return recs
+
+
+def combo_of(rec):
+    """Canonical 'SUPER + SHIFT + A' string for a bind record.
+
+    Some records carry the mods inside `key` too (`SUPER + ALT + code:10`);
+    the trailing token is always the real key.
+    """
+    key = rec.get("key", "")
+    if " + " in key:
+        key = key.rsplit(" + ", 1)[1]
+    try:
+        mask = int(rec.get("modmask", "0") or 0)
+    except ValueError:
+        mask = 0
+    mods = [name for bit, name in MODBITS if mask & bit]
+    return " + ".join(mods + [key]) if key else ""
+
+
+MOD_NAMES = {name for _, name in MODBITS}
+MOD_ALIASES = {"WIN": "SUPER", "MOD": "SUPER", "LOGO": "SUPER", "CONTROL": "CTRL"}
+
+
+def norm_combo(s):
+    """'shift+super+a' -> 'SUPER + SHIFT + A', so two spellings compare equal.
+
+    `hyprctl binds` and the Lua sources do not agree on modifier order or
+    separator, and attributing a binding means comparing the two.
+    """
+    parts = [p.strip().upper() for p in re.split(r"[+,]", s or "") if p.strip()]
+    mods, keys = [], []
+    for p in parts:
+        p = MOD_ALIASES.get(p, p)
+        (mods if p in MOD_NAMES else keys).append(p)
+    return " + ".join([m for _, m in MODBITS if m in mods] + keys)
+
+
+def is_keypad(key):
+    """True for keypad bindings, whether named (`KP_END`) or raw (`code:87`)."""
+    if key.startswith("KP_"):
+        return True
+    if key.startswith("code:"):
+        try:
+            return int(key[5:]) in KEYPAD_CODES
+        except ValueError:
+            return False
+    return False
+
+
+def js_code_for(key):
+    """KeyboardEvent.code for a Hyprland key name, or None if unmappable."""
+    if key.startswith("code:"):
+        try:
+            return XKEYCODE_MAP.get(int(key[5:]))
+        except ValueError:
+            return None
+    up = key.upper()
+    if len(up) == 1 and up.isalpha():
+        return "Key" + up
+    if len(up) == 1 and up.isdigit():
+        return "Digit" + up
+    if re.fullmatch(r"F\d{1,2}", up):
+        return up
+    return KEYCODE_MAP.get(up)
+
+
+def strip_lua_comments(text):
+    """Remove Lua comments, leaving string literals intact.
+
+    Omarchy's stock `bindings.lua` documents itself with commented-out
+    `o.bind(...)` examples. Matching against those tags upstream bindings as
+    the user's own on a *clean* install - "Omarchy menu" came out as "Mine"
+    on the strength of a comment.
+    """
+    out, i, n, quote = [], 0, len(text), None
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i:i + 2]); i += 2; continue
+            if ch == quote:
+                quote = None
+            out.append(ch); i += 1; continue
+        if ch in "\"'":
+            quote = ch; out.append(ch); i += 1; continue
+        if text.startswith("--", i):
+            if text.startswith("--[[", i):
+                end = text.find("]]", i + 4)
+                i = n if end < 0 else end + 2
+            else:
+                end = text.find("\n", i)
+                i = n if end < 0 else end
+            continue
+        out.append(ch); i += 1
+    return "".join(out)
+
+
+# `o.bind("SUPER + T", "Description", ...)` and the submap form
+# `hl.bind("RETURN", ..., { description = "..." })`.
+_O_BIND_RE = re.compile(r'\bo\.bind\(\s*"([^"]*)"\s*,\s*"([^"]*)"')
+_HL_BIND_RE = re.compile(r'\bhl\.bind\(\s*"([^"]*)"[^\n]*?description\s*=\s*"([^"]*)"')
+
+
+def build_category_index():
+    """(combo, description) -> category, read from the Lua sources.
+
+    Matching on the description alone claims every binding whose description
+    some other file happens to mention, so the pair is the real key. The
+    description-only map is a fallback for bindings defined in a shape these
+    two patterns do not catch, and it is built upstream-first: by the time it
+    is consulted the attribution is already ambiguous, and guessing "Mine"
+    there is the mistake this whole function exists to stop making.
+    """
+    by_pair, by_desc = {}, {}
+    for root, label in CATEGORY_SOURCES:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.lua")):
+            try:
+                text = strip_lua_comments(path.read_text(errors="replace"))
+            except OSError:
+                continue
+            cat = label or CATEGORY_LABELS.get(path.stem, path.stem.title())
+            for rx in (_O_BIND_RE, _HL_BIND_RE):
+                for combo, desc in rx.findall(text):
+                    if desc:
+                        by_pair.setdefault((norm_combo(combo), desc), cat)
+    for root, label in reversed(CATEGORY_SOURCES):
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.lua")):
+            try:
+                text = strip_lua_comments(path.read_text(errors="replace"))
+            except OSError:
+                continue
+            cat = label or CATEGORY_LABELS.get(path.stem, path.stem.title())
+            for rx in (_O_BIND_RE, _HL_BIND_RE):
+                for combo, desc in rx.findall(text):
+                    if desc:
+                        by_desc[desc] = cat
+    return by_pair, by_desc
+
+
+def category_for(index, combo, description):
+    by_pair, by_desc = index
+    return (by_pair.get((norm_combo(combo), description))
+            or by_desc.get(description) or "Other")
+
+
+def build_deck(with_status=False):
+    """Live bindings -> game cards, deduped and collapsed.
+
+    With `with_status`, also returns a plain-English reason when the deck comes
+    out unusable. An empty deck has two very different causes - no compositor,
+    or a config with no descriptions - and saying "0 bindings" for both sent
+    the user looking in the wrong place.
+    """
+    cards = {}          # description -> card
+    index = build_category_index()
+    records = parse_binds()
+    described = 0
+
+    for rec in records:
+        desc = rec.get("description", "").strip()
+        key = rec.get("key", "")
+        if " + " in key:
+            key = key.rsplit(" + ", 1)[1]
+        if rec.get("submap") or rec.get("catchall") == "true":
+            continue
+        if desc:
+            described += 1
+        else:
+            continue
+        if key.startswith("KP_") or is_keypad(key):   # clones of the number row
+            continue
+
+        combo = combo_of(rec)
+        if not combo:
+            continue
+
+        # Collapse "workspace 1..10" style families into one card.
+        placeholder = None
+        for pattern, label, ph in NUMERIC_FAMILIES:
+            if pattern.match(desc):
+                desc, placeholder = label, ph
+                break
+
+        card = cards.get(desc)
+        if card is None:
+            card = cards[desc] = {
+                "action": desc,
+                "keys": [],
+                "codes": [],
+                "category": category_for(index, combo, rec.get("description", "").strip()),
+                "_descs": [],
+                "family": placeholder,
+            }
+        card["_descs"].append((combo, rec.get("description", "").strip()))
+        if combo not in card["keys"]:
+            card["keys"].append(combo)
+            code = js_code_for(key)
+            card["codes"].append({
+                "combo": combo,
+                "code": code,
+                "super": bool(int(rec.get("modmask", "0") or 0) & 64),
+                "ctrl": bool(int(rec.get("modmask", "0") or 0) & 4),
+                "alt": bool(int(rec.get("modmask", "0") or 0) & 8),
+                "shift": bool(int(rec.get("modmask", "0") or 0) & 1),
+            })
+
+    deck = []
+    for card in cards.values():
+        # An aliased card can span both an upstream binding and the user's own
+        # override of it (SUPER+W and SUPER+Q are both "Close window"). Which
+        # one hyprctl happens to list first should not decide the category, and
+        # a binding the user wrote is the one worth knowing about.
+        for combo, desc in card.pop("_descs"):
+            if category_for(index, combo, desc) == "Mine":
+                card["category"] = "Mine"
+                break
+        # A card is live-fireable only if EVERY combo on it can be both pressed
+        # and suspended. Accepting a card because one alias qualifies means the
+        # others stay live - and a collapsed family card carries ten combos, so
+        # a single un-suspendable alias is a real workspace switch mid-drill.
+        usable = [c for c in card["codes"] if c["code"]]
+        card["live"] = (bool(usable) and len(usable) == len(card["codes"])
+                        and not any(denied(c["combo"], card["action"])
+                                    for c in card["codes"]))
+        card["id"] = card["action"]
+        deck.append(card)
+
+    deck.sort(key=lambda c: (c["category"], c["action"]))
+    if not with_status:
+        return deck
+
+    if not records:
+        status = ("No keybindings came back from hyprctl. "
+                  "Is Hyprland running in this session?")
+    elif not described:
+        status = (f"Found {len(records)} keybindings, but none of them carry a "
+                  "description. This drill reads Omarchy's o.bind(...) "
+                  "bindings; a plain Hyprland config has nothing to name.")
+    elif not deck:
+        status = "No drillable keybindings found."
+    else:
+        status = None
+    return deck, status
+
+
+def active_combos():
+    """Set of combos Hyprland currently has bound."""
+    out = set()
+    for rec in parse_binds():
+        c = combo_of(rec)
+        if c:
+            out.add(c)
+    return out
+
+
+# --------------------------------------------------------------------------
+# Suspending bindings
+# --------------------------------------------------------------------------
+
+def arm_deadman():
+    """Schedule a `hyprctl reload` even if this process never gets to run again.
+
+    `atexit` and signal handlers cover a clean exit, and the idle watchdog
+    covers a closed window, but neither survives `kill -9` - which would
+    otherwise leave a binding dead with no visible cause. A transient systemd
+    timer is the only layer that outlives the process.
+
+    Two things this has to get right, both learned the hard way:
+
+    * The timer fires on wall-clock, not on whether we are still alive, so the
+      action **checks first**. Arming it once per session meant a drill lasting
+      longer than the TTL got an unsolicited `hyprctl reload` mid-question -
+      and the old action deleted the marker unconditionally, so from that
+      moment the session had neither recovery layer left.
+    * It is re-armed periodically from the heartbeat, because a guarded action
+      that declines to fire leaves no timer behind.
+    """
+    marker = shlex.quote(str(MARKER))
+    guard = (f'pid=$(cat {marker} 2>/dev/null); '
+             f'if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then exit 0; fi; '
+             f'hyprctl reload; rm -f {marker}')
+    cancel_deadman()
+    try:
+        subprocess.run(["systemd-run", "--user", "--collect", "--quiet",
+                        f"--unit={DEADMAN}", f"--on-active={SUSPEND_TTL}s",
+                        "sh", "-c", guard],
+                       capture_output=True, timeout=10)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        # No systemd user session. The marker file still heals on next launch,
+        # and a clean exit still restores; only the hard-crash layer is gone.
+        return False
+
+
+def cancel_deadman():
+    for unit in (f"{DEADMAN}.timer", f"{DEADMAN}.service"):
+        try:
+            subprocess.run(["systemctl", "--user", "stop", unit],
+                           capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return False
+    return True
+
+
+def heal_stale_suspend():
+    """A previous run died with bindings down - put them back before starting."""
+    if MARKER.exists():
+        hyprctl("reload")
+        MARKER.unlink(missing_ok=True)
+        cancel_deadman()
+        return True
+    return False
+
+
+class Suspender:
+    """Unbinds a combo just before it is tested; restores everything at the end.
+
+    Only ever one binding needs to be down at a time, but they accumulate over
+    a session because restoring is a whole-config `hyprctl reload` rather than
+    a per-binding operation.
+
+    Hyprland auto-reloads its config whenever a config file is saved, which
+    silently puts a suspended binding back. That is why `arm()` re-checks and
+    re-suspends on every question instead of trusting a bulk suspend done at
+    session start.
+    """
+
+    def __init__(self):
+        self.suspended = set()
+        self.deadline = 0.0
+        self.armed_at = 0.0
+        self.lock = threading.Lock()
+
+    def arm(self, combo, description=""):
+        """Ensure `combo` is unbound right now. True if it is."""
+        with self.lock:
+            if denied(combo, description):
+                return False
+            if combo not in active_combos():
+                self._mark(combo)
+                return True
+            hyprctl("eval", f'hl.unbind("{combo}")')
+            ok = combo not in active_combos()
+            if ok:
+                self._mark(combo)
+            return ok
+
+    def verify(self):
+        """Which of our suspended combos are actually still down.
+
+        `self.suspended` is bookkeeping, not evidence. Hyprland restores every
+        binding on any config save, so a combo can come back while its question
+        is still on screen - and reporting the bookkeeping meant the banner
+        claimed a binding was suspended after it had gone live again, with the
+        next keypress firing for real. Anything that came back is dropped here
+        and named to the page, which re-arms or stops asking for it.
+        """
+        with self.lock:
+            if not self.suspended:
+                return [], []
+            live = active_combos()
+            back = sorted(c for c in self.suspended if c in live)
+            self.suspended -= set(back)
+            if not self.suspended:
+                MARKER.unlink(missing_ok=True)
+                cancel_deadman()
+            return sorted(self.suspended), back
+
+    def _mark(self, combo):
+        self.suspended.add(combo)
+        self.deadline = time.time() + SUSPEND_TTL
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            MARKER.write_text(f"{os.getpid()}\n")
+        except OSError:
+            pass
+        if time.time() - self.armed_at > DEADMAN_REARM:
+            self.armed_at = time.time()
+            arm_deadman()
+
+    def restore(self):
+        with self.lock:
+            if not self.suspended:
+                return False
+            hyprctl("reload")
+            self.suspended.clear()
+            self.deadline = 0.0
+            self.armed_at = 0.0
+            MARKER.unlink(missing_ok=True)
+            cancel_deadman()
+            return True
+
+    def touch(self):
+        if not self.suspended:
+            return
+        self.deadline = time.time() + SUSPEND_TTL
+        if time.time() - self.armed_at > DEADMAN_REARM:
+            self.armed_at = time.time()
+            arm_deadman()
+
+    def expired(self):
+        return bool(self.suspended) and time.time() > self.deadline
+
+
+SUSPENDER = Suspender()
+
+
+# --------------------------------------------------------------------------
+# Theme + progress
+# --------------------------------------------------------------------------
+
+def load_progress():
+    """Always returns a usable shape.
+
+    Missing and malformed were already handled; valid JSON of the *wrong*
+    shape (`null`, a list, an object with no "bindings") was not, and threw
+    from inside the request handler where the page's .catch() swallowed it and
+    the whole session's results were lost without a word.
+    """
+    try:
+        data = json.loads(PROGRESS.read_text())
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict):
+        data = {}
+    if not isinstance(data.get("bindings"), dict):
+        data["bindings"] = {}
+    if not isinstance(data.get("sessions"), list):
+        data["sessions"] = []
+    return data
+
+
+def save_progress(data):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = PROGRESS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
+    tmp.replace(PROGRESS)
+
+
+def merge_progress(update):
+    if update.get("reset"):
+        PROGRESS.unlink(missing_ok=True)
+        return load_progress()
+    data = load_progress()
+    for key, delta in (update.get("bindings") or {}).items():
+        if not isinstance(delta, dict):
+            continue
+        row = data["bindings"].get(key)
+        if not isinstance(row, dict):
+            row = data["bindings"][key] = {"seen": 0, "right": 0, "missed_at": 0}
+        for field in ("seen", "right", "missed_at"):
+            if not isinstance(row.get(field), int):
+                row[field] = 0
+        row["seen"] += delta.get("seen", 0)
+        row["right"] += delta.get("right", 0)
+        if delta.get("missed_at"):
+            row["missed_at"] = delta["missed_at"]
+    if update.get("session"):
+        data["sessions"] = (data.get("sessions", []) + [update["session"]])[-200:]
+    save_progress(data)
+    return data
+
+
+# --------------------------------------------------------------------------
+# Server
+# --------------------------------------------------------------------------
+
+class State:
+    last_ping = time.time()
+
+
+def make_handler():
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def handle_error(self, *a):
+            # Browsers open speculative connections and drop them, which the
+            # stdlib reports as a full traceback. Real failures reach log_error.
+            pass
+
+        def _send(self, code, body, ctype="application/json"):
+            if isinstance(body, (dict, list)):
+                body = json.dumps(body)
+            raw = body.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def _local(self):
+            """Reject anything that is not this page talking to us.
+
+            The server binds loopback, but every page in the user's browser is
+            on loopback's client side - and `POST /arm` unbinds real Hyprland
+            keybindings. A simple no-preflight cross-origin POST reached it.
+            """
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+            if host.strip("[]") not in ("127.0.0.1", "localhost", "::1", ""):
+                return False
+            origin = self.headers.get("Origin")
+            if origin:
+                from urllib.parse import urlparse
+                try:
+                    if urlparse(origin).hostname not in ("127.0.0.1", "localhost", "::1"):
+                        return False
+                except ValueError:
+                    return False
+            return True
+
+        def _body(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            if not n:
+                return {}
+            try:
+                return json.loads(self.rfile.read(n))
+            except ValueError:
+                return {}
+
+        def do_GET(self):
+            State.last_ping = time.time()
+            path = self.path.split("?")[0]
+            if path == "/whoami":
+                # Lets a second launch tell "the drill is already running" from
+                # "something else has this port".
+                return self._send(200, {"app": SIGNATURE, "pid": os.getpid()})
+            if path == "/":
+                page = find_data("app.html")
+                if page is None:
+                    return self._send(500, "app.html not found beside the "
+                                      "script or in any data directory",
+                                      "text/plain")
+                try:
+                    html = page.read_text()
+                except OSError as e:
+                    return self._send(500, f"cannot read {page}: {e}", "text/plain")
+                # Rebuilt per load so a theme switch or a bindings.lua edit
+                # shows up without restarting the server.
+                try:
+                    deck, status = build_deck(with_status=True)
+                except HyprError as e:
+                    deck, status = [], str(e)
+                boot = json.dumps({"deck": deck, "palette": theme_colors(),
+                                   "status": status})
+                # json.dumps does not escape "<", so a description containing
+                # </script> would break out of the boot block.
+                boot = boot.replace("</", "<\\/")
+                html = html.replace("/*__BOOT__*/null", boot)
+                return self._send(200, html, "text/html; charset=utf-8")
+            if path == "/progress":
+                if not self._local():
+                    return self._send(403, {"error": "cross-origin"})
+                return self._send(200, load_progress())
+            if path == "/ping":
+                if not self._local():
+                    return self._send(403, {"error": "cross-origin"})
+                SUSPENDER.touch()
+                down, back = SUSPENDER.verify()
+                # The palette rides the heartbeat so switching themes recolours
+                # a drill already in progress, without losing session state.
+                return self._send(200, {"suspended": down, "restored": back,
+                                        "palette": theme_colors()})
+            return self._send(404, {"error": "not found"})
+
+        def do_POST(self):
+            State.last_ping = time.time()
+            path = self.path.split("?")[0]
+            if not self._local():
+                return self._send(403, {"error": "cross-origin"})
+            if path == "/arm":
+                body = self._body()
+                combo = body.get("combo", "")
+                action = body.get("action", "")
+                return self._send(200, {"ready": SUSPENDER.arm(combo, action)
+                                        if combo else False})
+            if path == "/restore":
+                return self._send(200, {"restored": SUSPENDER.restore()})
+            if path == "/progress":
+                return self._send(200, merge_progress(self._body()))
+            if path == "/quit":
+                SUSPENDER.restore()
+                threading.Timer(0.3, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+                return self._send(200, {"bye": True})
+            return self._send(404, {"error": "not found"})
+
+    return Handler
+
+
+def watchdog(httpd):
+    while True:
+        time.sleep(5)
+        if SUSPENDER.expired():
+            SUSPENDER.restore()
+        if time.time() - State.last_ping > IDLE_TIMEOUT:
+            SUSPENDER.restore()
+            threading.Thread(target=httpd.shutdown, daemon=True).start()
+            return
+
+
+def port_in_use(port):
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def port_owner(port):
+    """None if free, "ours" if it is another copy of this drill, else "other".
+
+    A bare TCP connect only proves *something* is listening. Treating that as
+    "already running" pointed the user's browser at whatever else happened to
+    hold the port, and skipped the stale-suspend heal on the way past.
+    """
+    if not port_in_use(port):
+        return None
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/whoami", timeout=1.0) as r:
+            if json.loads(r.read(4096)).get("app") == SIGNATURE:
+                return "ours"
+    except Exception:
+        pass
+    return "other"
+
+
+def pick_port(preferred):
+    """The preferred port, or the first free one after it."""
+    for port in range(preferred, preferred + 20):
+        if port_owner(port) is None:
+            return port
+    return None
+
+
+def open_browser(url):
+    """Chromium via Omarchy's launcher, then whatever the user has.
+
+    `omarchy-launch-webapp` is not on PATH off Omarchy, and `Popen` raised an
+    uncaught FileNotFoundError into a process whose stderr was already
+    /dev/null - no window, no message, nothing to look at.
+    """
+    import shutil
+    candidates = [["omarchy-launch-webapp", url]]
+    browser = os.environ.get("BROWSER", "").strip()
+    if browser:
+        candidates.append([browser, url])
+    candidates += [["xdg-open", url], ["chromium", f"--app={url}"],
+                   ["google-chrome-stable", f"--app={url}"], ["firefox", url]]
+    for cmd in candidates:
+        if shutil.which(cmd[0]) is None:
+            continue
+        try:
+            subprocess.Popen(cmd, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except OSError:
+            continue
+    log_error(f"could not find a browser to open. Visit {url} yourself.")
+    return False
+
+
+def daemonize():
+    """Detach so the menu entry (and a terminal) get their prompt back.
+
+    The server outlives this call and shuts itself down once the page stops
+    pinging, so nothing is left running after the window is closed.
+    """
+    if os.fork() > 0:
+        os._exit(0)
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(devnull, fd)
+
+
+def serve(foreground=False, port=None):
+    global PORT
+    preferred = port or int(os.environ.get("OMARCHY_KEYBIND_TRAINER_PORT")
+                            or DEFAULT_PORT)
+
+    owner = port_owner(preferred)
+    if owner == "ours":
+        open_browser(f"http://127.0.0.1:{preferred}/")   # just bring it up
+        return 0
+    if owner == "other":
+        chosen = pick_port(preferred + 1)
+        if chosen is None:
+            log_error(f"port {preferred} is taken by something else and no "
+                      f"nearby port is free. Try --port.")
+            return 1
+        log_error(f"port {preferred} is taken by something else; using {chosen}")
+    else:
+        chosen = preferred
+    PORT = chosen
+    url = f"http://127.0.0.1:{PORT}/"
+
+    # Everything that can fail is checked BEFORE detaching. Past daemonize()
+    # stderr is /dev/null, so a failure here used to mean the menu entry did
+    # nothing at all, forever, with nothing to look at.
+    if find_data("app.html") is None:
+        log_error("app.html not found beside the script or in any data "
+                  "directory - is the install complete?")
+        return 1
+    try:
+        deck, status = build_deck(with_status=True)
+    except HyprError as e:
+        log_error(str(e))
+        return 1
+    if status:
+        log_error(status)          # still serve: the page explains it better
+
+    if heal_stale_suspend():
+        print("restored bindings left suspended by a previous run", file=sys.stderr)
+
+    try:
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), make_handler())
+    except OSError as e:
+        log_error(f"could not listen on {PORT}: {e}")
+        return 1
+
+    if not foreground:
+        daemonize()
+
+    def bail(*_):
+        SUSPENDER.restore()
+        raise SystemExit(0)
+
+    atexit.register(SUSPENDER.restore)
+    signal.signal(signal.SIGTERM, bail)
+    signal.signal(signal.SIGINT, bail)
+
+    threading.Thread(target=watchdog, args=(httpd,), daemon=True).start()
+    open_browser(url)
+    try:
+        httpd.serve_forever()
+    finally:
+        SUSPENDER.restore()
+    return 0
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--print-deck", action="store_true", help="dump the deck as JSON")
+    ap.add_argument("--stats", action="store_true", help="show saved progress")
+    ap.add_argument("--restore", action="store_true",
+                    help="panic button: reload Hyprland config, restoring every binding")
+    ap.add_argument("--reset", action="store_true", help="erase saved progress")
+    ap.add_argument("--foreground", action="store_true",
+                    help="do not detach (for debugging)")
+    ap.add_argument("--port", type=int, default=None,
+                    help=f"port to serve on (default {DEFAULT_PORT}, "
+                         "or $OMARCHY_KEYBIND_TRAINER_PORT)")
+    args = ap.parse_args()
+
+    if args.print_deck:
+        try:
+            deck, status = build_deck(with_status=True)
+        except HyprError as e:
+            raise SystemExit(f"omarchy-keybind-trainer: {e}")
+        if status:
+            print(f"omarchy-keybind-trainer: {status}", file=sys.stderr)
+        print(json.dumps(deck, indent=1))
+        return
+    if args.restore:
+        MARKER.unlink(missing_ok=True)
+        cancel_deadman()
+        try:
+            hyprctl("reload", check=True)
+        except HyprError as e:
+            raise SystemExit(f"omarchy-keybind-trainer: {e}\n"
+                             "Nothing was restored. Run `hyprctl reload` once "
+                             "Hyprland is reachable.")
+        print("hyprctl reload sent - all bindings restored")
+        return
+    if args.reset:
+        PROGRESS.unlink(missing_ok=True)
+        print("progress erased")
+        return
+    if args.stats:
+        data = load_progress()
+        rows = [(v["right"] / v["seen"], k, v) for k, v in data["bindings"].items() if v["seen"]]
+        rows.sort()
+        print(f"{len(data['bindings'])} bindings seen over {len(data.get('sessions', []))} sessions")
+        for acc, name, v in rows[:15]:
+            print(f"  {acc:5.0%}  {v['right']}/{v['seen']}  {name}")
+        return
+
+    raise SystemExit(serve(foreground=args.foreground, port=args.port))
+
+
+if __name__ == "__main__":
+    main()

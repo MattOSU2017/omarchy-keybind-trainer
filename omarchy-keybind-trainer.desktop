@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Keybinding Drill
+Comment=Drill your Omarchy keybindings by pressing them for real
+Exec=omarchy-keybind-trainer
+Icon=input-keyboard
+Terminal=false
+Categories=Education;Utility;
+Keywords=keybinding;shortcut;drill;practice;hyprland;omarchy;
+StartupNotify=false

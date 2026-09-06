@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Keybinding Drill</title>
+<style>
+/* Every colour here is a token resolved from the active Omarchy theme by
+   omarchy-keybind-trainer and injected at /. Nothing is hardcoded, and there
+   are no hairline borders: separation is fill plus elevation. */
+:root{
+  --sans:"Adwaita Sans",system-ui,"Noto Sans",sans-serif;
+  --mono:"JetBrainsMono Nerd Font",ui-monospace,monospace;
+  --r:26px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--page);color:var(--fg);font-family:var(--sans);
+  font-size:15px;-webkit-font-smoothing:antialiased;overflow:hidden}
+.hidden{display:none!important}
+button{font:inherit}
+
+.stage{height:100vh;display:flex;flex-direction:column;padding:22px clamp(18px,2vw,34px);gap:18px}
+.top{display:flex;align-items:center;gap:16px;flex:none}
+.logo{width:42px;height:42px;border-radius:14px;background:var(--accent);
+  display:grid;place-items:center;box-shadow:var(--e1);flex:none}
+.wordmark{font-weight:800;font-size:17px;letter-spacing:-.01em;line-height:1.15}
+.wordmark span{display:block;font-weight:500;font-size:12px;color:var(--muted)}
+.grow{flex:1}
+.pillbar{display:flex;align-items:center;gap:14px;background:var(--card);
+  border-radius:999px;padding:10px 20px;font-size:13px;font-weight:700;box-shadow:var(--e1)}
+.pillbar b{color:var(--accent)}
+.pillbar u{text-decoration:none;color:var(--muted);font-weight:600}
+.dots{display:flex;gap:4px;flex-wrap:wrap;max-width:340px}
+.dots i{width:7px;height:7px;border-radius:50%;background:var(--track);display:block}
+.dots i.on{background:var(--accent)} .dots i.now{background:var(--fg)}
+
+.grid{flex:1;display:grid;grid-template-columns:1fr clamp(300px,26vw,392px);
+  gap:18px;min-height:0}
+.grid.even{grid-template-columns:1fr 1fr}
+.colL,.colR{display:flex;flex-direction:column;gap:18px;min-height:0}
+.card{background:var(--card);border-radius:var(--r);box-shadow:var(--e1);
+  padding:clamp(22px,2.4vw,32px)}
+.hero{flex:1;display:flex;flex-direction:column;box-shadow:var(--e2);
+  position:relative;overflow:hidden;min-height:0}
+.hero.v-center{justify-content:center;padding-bottom:84px}
+.hero.v-top{justify-content:flex-start;overflow-y:auto}
+.hero>.vwrap{margin:auto 0;width:100%}
+.eyebrow{font-size:13px;font-weight:700;color:var(--accent);letter-spacing:.03em}
+h1.big{margin:12px 0 0;font-size:clamp(30px,3.9vw,60px);line-height:1.02;
+  font-weight:800;letter-spacing:-.035em;max-width:16ch}
+h1.big em{font-style:normal;color:var(--muted);font-weight:600}
+.qhint{font-size:13px;color:var(--muted);margin-top:10px;min-height:1.2em}
+.listen{margin-top:26px;display:inline-flex;align-items:center;gap:13px;
+  background:var(--sunk);border-radius:999px;padding:13px 22px;font-size:14px;
+  font-weight:600;align-self:flex-start}
+.blip{width:9px;height:9px;border-radius:50%;background:var(--accent);
+  animation:blip 1.4s infinite;flex:none}
+@keyframes blip{0%,100%{opacity:.28}50%{opacity:1}}
+.recent{position:absolute;left:clamp(22px,2.4vw,32px);right:clamp(22px,2.4vw,32px);
+  bottom:24px;display:flex;gap:26px;align-items:center;flex-wrap:wrap;font-size:13px}
+.recent .u{display:flex;align-items:center;gap:10px;color:var(--muted)}
+.recent .u b{font-weight:600;color:var(--fg)}
+.tick{width:20px;height:20px;border-radius:7px;display:grid;place-items:center;
+  flex:none;font-size:12px;font-weight:800}
+.tick.y{background:var(--ok);color:var(--on-ok)}
+.tick.n{background:var(--bad);color:var(--on-bad)}
+
+.warnrow{display:flex;align-items:center;gap:13px;background:var(--warn-bg);
+  color:var(--warn-ink);border-radius:20px;padding:15px 22px;font-size:13.5px;
+  font-weight:600;flex:none}
+#banner{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:50;
+  max-width:min(720px,calc(100vw - 36px));box-shadow:var(--e2)}
+#bootfail{max-width:620px;margin:18vh auto;padding:28px 32px;background:var(--card);
+  border-radius:22px;box-shadow:var(--e2);font-size:15px;line-height:1.55}
+#bootfail h1{font-size:20px;margin:0 0 10px}
+#bootfail code{font-family:var(--mono);background:var(--sunk);padding:2px 6px;border-radius:6px}
+.chipbtn{margin-left:auto;background:var(--warn);color:var(--on-warn);border:0;
+  border-radius:999px;padding:9px 18px;font-size:12.5px;font-weight:700;cursor:pointer}
+
+.block{background:var(--accent);color:var(--on-accent);box-shadow:var(--e2)}
+.block.neg{background:var(--bad);color:var(--on-bad)}
+.block .n{font-size:clamp(44px,5vw,72px);font-weight:800;line-height:.9;letter-spacing:-.05em}
+.block .n small{font-size:.45em;font-weight:700}
+.block .t{font-size:13px;font-weight:700;opacity:.8;margin-top:6px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.mini{padding:20px 22px}
+.mini .n{font-size:29px;font-weight:800;letter-spacing:-.03em}
+.mini .t{font-size:12px;font-weight:600;color:var(--muted);margin-top:3px}
+.fill{flex:1;display:flex;flex-direction:column;justify-content:flex-start;
+  min-height:0;overflow-y:auto}
+.fill.spread{justify-content:space-between}
+.h{font-size:13px;font-weight:700;color:var(--muted)}
+.runsq{display:flex;flex-wrap:wrap;gap:7px;margin-top:14px}
+.runsq i{width:24px;height:24px;border-radius:8px;background:var(--track);display:block}
+.runsq i.hit{background:var(--ok)} .runsq i.miss{background:var(--bad)}
+.hint{font-size:12.5px;color:var(--muted);line-height:1.6;margin:14px 0 0}
+
+/* keycaps */
+.combo{display:inline-flex;align-items:center;gap:7px;flex-wrap:nowrap;vertical-align:middle}
+kbd{display:inline-flex;align-items:center;justify-content:center;min-width:2.9em;
+  padding:.48em .74em;font-family:var(--mono);font-size:14px;font-weight:600;
+  color:var(--fg);background:linear-gradient(180deg,var(--key-hi),var(--key));
+  border-radius:10px;box-shadow:0 3px 0 var(--key-skirt),0 5px 10px var(--key-shadow)}
+kbd.big{font-size:clamp(17px,2vw,24px);min-width:3em;padding:.52em .86em;border-radius:12px;
+  box-shadow:0 4px 0 var(--key-skirt),0 7px 14px var(--key-shadow)}
+.plus{color:var(--faint);font-size:12px;font-weight:700}
+
+/* multiple choice */
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:24px}
+.opt{display:flex;align-items:center;gap:15px;padding:16px 18px;border-radius:18px;
+  background:var(--sunk);border:0;color:var(--fg);text-align:left;cursor:pointer;
+  transition:transform .1s}
+.opt:hover{transform:translateY(-1px)}
+.opt .num{width:26px;height:26px;flex:none;border-radius:9px;display:grid;
+  place-items:center;font-size:12px;font-weight:800;color:var(--muted);background:var(--track)}
+.opt.right{background:var(--ok-bg)} .opt.right .num{background:var(--ok);color:var(--on-ok)}
+.opt.wrong{background:var(--bad-bg)} .opt.wrong .num{background:var(--bad);color:var(--on-bad)}
+.verdict{margin-top:20px;padding:20px 24px;border-radius:20px;background:var(--sunk);
+  min-height:5.4em}
+.verdict.ok{background:var(--ok-bg)} .verdict.bad{background:var(--bad-bg)}
+.verdict h3{margin:0;font-size:17px;font-weight:800}
+.verdict.ok h3{color:var(--ok)} .verdict.bad h3{color:var(--bad)}
+.verdict p{margin:9px 0 0;font-size:13.5px;line-height:1.7;color:var(--muted)}
+.verdict .go-on{margin-top:10px;font-size:12px;color:var(--faint);font-weight:600}
+
+/* chips + controls */
+.chips{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px}
+.chip{font-size:13px;font-weight:600;cursor:pointer;color:var(--muted);
+  background:var(--sunk);border:0;border-radius:999px;padding:10px 17px;
+  display:inline-flex;align-items:center;gap:8px}
+.chip .n{font-size:11px;opacity:.75}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--on-accent);font-weight:700}
+.chip[aria-pressed="true"] .n{opacity:.8}
+.lab{font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.go{font-size:15px;font-weight:800;color:var(--on-accent);background:var(--accent);
+  border:0;border-radius:16px;padding:16px 26px;cursor:pointer;box-shadow:var(--e2)}
+.ghost{font-size:13px;font-weight:600;color:var(--muted);background:var(--sunk);
+  border:0;border-radius:999px;padding:10px 18px;cursor:pointer}
+.ghost:hover{color:var(--fg)}
+.field{margin-top:22px}
+
+.rows{display:flex;flex-direction:column;margin-top:10px}
+.row{display:flex;align-items:center;gap:14px;padding:11px 0;font-size:13.5px}
+.row .what{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .acc{font-size:11px;font-weight:700;color:var(--bad)}
+.bars{display:flex;flex-direction:column;gap:11px;margin-top:12px}
+.barrow{display:grid;grid-template-columns:minmax(70px,88px) 1fr 42px;gap:12px;
+  align-items:center;font-size:13px}
+.track{height:9px;border-radius:5px;background:var(--track);overflow:hidden}
+.track i{display:block;height:100%;border-radius:5px;background:var(--accent)}
+.pct{text-align:right;font-size:12px;color:var(--muted);font-weight:600}
+.acts{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+
+@media (max-width:1000px){
+  .grid,.grid.even{grid-template-columns:1fr}
+  .colR{flex-direction:row;flex-wrap:wrap}
+  .colR>*{flex:1 1 220px}
+  .opts{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- ================= START ================= -->
+<section id="start" class="stage">
+  <header class="top">
+    <span class="logo" id="logo1"></span>
+    <span class="wordmark">Keybind drill<span id="deckInfo"></span></span>
+    <span class="grow"></span>
+    <button class="ghost" onclick="showStats()">Progress</button>
+  </header>
+
+  <div class="grid">
+    <div class="colL">
+      <div class="card hero v-top">
+        <div class="vwrap">
+        <h1 class="big" style="margin:0">Learn the keys <em>by pressing them</em></h1>
+        <div class="field">
+          <span class="lab">Mode</span>
+          <div class="chips" id="modes"></div>
+          <p class="hint" id="modeDesc" style="max-width:62ch"></p>
+        </div>
+        <div class="field">
+          <span class="lab">Categories</span>
+          <div class="chips" id="cats"></div>
+        </div>
+        <div class="field">
+          <span class="lab">Length</span>
+          <div class="chips" id="lens"></div>
+        </div>
+        </div>
+      </div>
+    </div>
+    <div class="colR">
+      <div class="card" id="dueCard">
+        <span class="h">Due for another look</span>
+        <div class="rows" id="dueList"></div>
+        <p class="hint">These resurface three times as often until you have them.</p>
+      </div>
+      <div class="card block"><div class="n" id="sHeroAcc">—</div>
+        <div class="t" id="sHeroSub">lifetime accuracy</div></div>
+      <div class="card fill spread">
+        <button class="go" style="width:100%" onclick="startSession()">Start drill</button>
+        <div style="margin-top:18px">
+          <span class="h">Answer with</span>
+          <div class="combo" style="margin-top:11px">
+            <kbd>1</kbd><span class="plus">–</span><kbd>4</kbd>
+            <span class="plus" style="margin:0 6px">·</span>
+            <kbd style="min-width:3.6em">Esc</kbd><span class="hint" style="margin:0">skips</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= QUIZ ================= -->
+<section id="quiz" class="stage hidden">
+  <header class="top">
+    <span class="logo" id="logo2"></span>
+    <span class="wordmark">Keybind drill<span id="qMode"></span></span>
+    <span class="grow"></span>
+    <span class="pillbar">
+      <span><u>Question</u> <b id="counter"></b></span>
+      <span class="dots" id="dots"></span>
+    </span>
+  </header>
+
+  <div class="grid">
+    <div class="colL">
+      <div class="card hero v-center" id="heroCard">
+        <div>
+          <span class="eyebrow" id="qKind"></span>
+          <h1 class="big" id="qWhat"></h1>
+          <div class="qhint" id="qHint"></div>
+          <div id="listen" class="listen hidden">
+            <span class="blip"></span>
+            <span>Listening — the binding is suspended, nothing will fire</span>
+          </div>
+          <div id="opts" class="opts hidden"></div>
+          <div id="verdict" class="verdict hidden"></div>
+        </div>
+        <div class="recent" id="recentStrip"></div>
+      </div>
+    </div>
+
+    <div class="colR">
+      <div class="card block" id="streakBlock">
+        <div class="n" id="streakN">0</div><div class="t" id="streakT">in a row</div>
+      </div>
+      <div class="two">
+        <div class="card mini"><div class="n" id="mCorrect">0/0</div><div class="t">Correct</div></div>
+        <div class="card mini"><div class="n" id="mElapsed">0:00</div><div class="t">Elapsed</div></div>
+      </div>
+      <div class="card fill spread">
+        <div>
+          <span class="h">This session</span>
+          <div class="runsq" id="runSq"></div>
+          <p class="hint" id="railNote"></p>
+        </div>
+        <div class="acts">
+          <button class="ghost" onclick="skip()">Skip</button>
+          <button class="ghost" onclick="endSession()">End drill</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= RESULTS ================= -->
+<section id="results" class="stage hidden">
+  <header class="top">
+    <span class="logo" id="logo3"></span>
+    <span class="wordmark">Keybind drill<span id="rSub">Drill complete</span></span>
+    <span class="grow"></span>
+    <button class="ghost" onclick="home()">Back</button>
+  </header>
+  <div class="grid even">
+    <div class="colL">
+      <div class="card block"><div class="n" id="rScore">0</div>
+        <div class="t" id="rSubline"></div></div>
+      <div class="card fill spread" id="missedWrap">
+        <div>
+          <span class="h">Missed — drill these again</span>
+          <div class="rows" id="missedList"></div>
+        </div>
+        <div class="acts">
+          <button class="go" id="retryBtn" onclick="retryMissed()">Drill the missed ones</button>
+          <button class="ghost" onclick="home()">New drill</button>
+        </div>
+      </div>
+    </div>
+    <div class="colR">
+      <div class="card">
+        <span class="h">By category</span>
+        <div class="bars" id="rBars"></div>
+      </div>
+      <div class="card fill">
+        <span class="h">Weakest bindings — all time</span>
+        <div class="rows" id="rWeak"></div>
+        <p class="hint" id="rSeen"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= STATS ================= -->
+<section id="stats" class="stage hidden">
+  <header class="top">
+    <span class="logo" id="logo4"></span>
+    <span class="wordmark">Keybind drill<span>Progress</span></span>
+    <span class="grow"></span>
+    <button class="ghost" onclick="home()">Back</button>
+    <button class="ghost" onclick="resetProgress()">Reset progress</button>
+  </header>
+  <div class="grid even">
+    <div class="colL">
+      <div class="card block"><div class="n" id="sAcc">—</div>
+        <div class="t"><span id="sSess">0</span> drills · <span id="sSeen">0</span> bindings seen</div></div>
+      <div class="card fill">
+        <span class="h">By category</span>
+        <div class="bars" id="catBars"></div>
+      </div>
+    </div>
+    <div class="colR">
+      <div class="card fill">
+        <span class="h">Weakest bindings</span>
+        <div class="rows" id="weakList"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Floats over every screen: a binding can still be suspended on the results
+     and stats screens, and the banner used to be inside #quiz only. -->
+<div id="banner" class="warnrow hidden">
+  <span id="bannerText"></span>
+  <button class="chipbtn" onclick="restoreNow()">Restore now</button>
+</div>
+
+<script>
+const BOOT = /*__BOOT__*/null;
+// Opened as a file:// page, or the server never substituted the boot block.
+// Without this the whole app is a blank white screen and a console TypeError.
+if (!BOOT || !Array.isArray(BOOT.deck)) {
+  document.body.innerHTML = `<div id="bootfail"><h1>Nothing to drill yet</h1>
+    <p>This page has to be served by the drill itself — open it with
+    <code>omarchy-keybind-trainer</code> rather than from a file.</p></div>`;
+  throw new Error('no boot payload');
+}
+const DECK = BOOT.deck;
+for (const [k,v] of Object.entries(BOOT.palette||{}))
+  document.documentElement.style.setProperty('--'+k, v);
+
+// The server distinguishes "no compositor" from "a config with no
+// descriptions"; both used to arrive as a bare "0 bindings".
+if (BOOT.status) {
+  document.body.innerHTML = `<div id="bootfail"><h1>Nothing to drill yet</h1>
+    <p>${esc(BOOT.status)}</p></div>`;
+  throw new Error(BOOT.status);
+}
+
+const LOGO = `<svg width="21" height="21" viewBox="0 0 24 24" fill="none">
+  <rect x="2.5" y="5.5" width="19" height="13" rx="3.5" stroke="var(--on-accent)" stroke-width="1.9"/>
+  <path d="M7 10h.8M10.6 10h.8M14.2 10h.8M17.8 10h.4M8.4 14.2h7.2"
+        stroke="var(--on-accent)" stroke-width="1.9" stroke-linecap="round"/></svg>`;
+for (const id of ['logo1','logo2','logo3','logo4']) document.getElementById(id).innerHTML = LOGO;
+
+/* ---------- key naming ---------- */
+const XCODE = {10:'1',11:'2',12:'3',13:'4',14:'5',15:'6',16:'7',17:'8',18:'9',19:'0',
+               20:'-',21:'=',34:'[',35:']',
+               // F13–F24 are X11 191–202 (evdev + 8).
+               191:'F13',192:'F14',193:'F15',194:'F16',195:'F17',196:'F18',
+               197:'F19',198:'F20',199:'F21',200:'F22',201:'F23',202:'F24'};
+const PRETTY = {RETURN:'Enter',ESCAPE:'Esc',SPACE:'Space',BACKSPACE:'Bksp',
+  'MOUSE:272':'Left click','MOUSE:273':'Right click','MOUSE:274':'Middle click',
+  MOUSE_DOWN:'Scroll ↓',MOUSE_UP:'Scroll ↑',
+  PRIOR:'PgUp',NEXT:'PgDn',PRINT:'PrtSc',COMMA:',',MINUS:'-',EQUAL:'=',SLASH:'/',
+  BRACKETLEFT:'[',BRACKETRIGHT:']',LEFT:'←',RIGHT:'→',UP:'↑',DOWN:'↓'};
+
+const XF86 = {AudioRaiseVolume:'Vol +',AudioLowerVolume:'Vol −',AudioMute:'Mute',
+  AudioMicMute:'Mic mute',AudioPlay:'Play',AudioPause:'Pause',AudioStop:'Stop',
+  AudioNext:'Next',AudioPrev:'Prev',MonBrightnessUp:'Bright +',MonBrightnessDown:'Bright −',
+  TouchpadOff:'Touchpad off',TouchpadOn:'Touchpad on',TouchpadToggle:'Touchpad',
+  Eject:'Eject',Calculator:'Calc',Search:'Search',Explorer:'Files',HomePage:'Home'};
+function keyName(tok){
+  if (tok.startsWith('code:')) return XCODE[+tok.slice(5)] ?? tok;
+  // Media and laptop keys arrive as raw X keysyms (XF86AudioMicMute); show a
+  // readable name rather than the symbol.
+  if (tok.startsWith('XF86')){
+    const bare = tok.slice(4);
+    return XF86[bare] ?? bare.replace(/([a-z])([A-Z])/g, '$1 $2');
+  }
+  const u = tok.toUpperCase();
+  return PRETTY[u] ?? (u.length===1 ? u : tok);
+}
+function displayCombo(card){
+  const usable = card.codes.find(c=>c.code);
+  return usable ? usable.combo : card.keys[0];
+}
+function caps(combo, big){
+  return combo.split(' + ').map(keyName)
+    .map(p=>`<kbd class="${big?'big':''}">${esc(p)}</kbd>`)
+    .join('<span class="plus">+</span>');
+}
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+const TICK = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7.5"
+  stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const CROSS = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"
+  stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/></svg>`;
+
+/* ---------- state ---------- */
+const MODES = {
+  live:   ['Live fire',    'The binding under test is suspended for a moment, so the keys reach the drill instead of firing the action. Nothing launches, nothing closes.'],
+  recall: ['Keys → action','You are shown a combo and pick what it does. Never touches your config.'],
+  quiet:  ['Quiet quiz',   'Multiple choice, both directions. Never touches your config.'],
+};
+let mode='live', chosenCats=new Set(), length=15;
+let queue=[], idx=0, right=0, streak=0, best=0, missed=[], answered=false, sessionStart=0;
+let deltas={}, suspended=[], locked=false, results=[], timer=null;
+
+/* ---------- start screen ---------- */
+const cats = [...new Set(DECK.map(c=>c.category))]
+  .sort((a,b)=> (a==='Mine'?-1:b==='Mine'?1:a.localeCompare(b)));
+cats.forEach(c=>chosenCats.add(c));
+
+document.getElementById('deckInfo').textContent =
+  `${DECK.length} bindings · ${DECK.filter(c=>c.live).length} pressable · read from hyprctl on every launch`;
+
+function chipRow(el, items, isOn, onClick){
+  el.innerHTML='';
+  items.forEach(it=>{
+    const b=document.createElement('button');
+    b.className='chip';
+    b.innerHTML = it.n!=null ? `${esc(it.label)} <span class="n">${it.n}</span>` : esc(it.label);
+    b.setAttribute('aria-pressed', isOn(it.value));
+    b.onclick=()=>{onClick(it.value); render();};
+    el.appendChild(b);
+  });
+}
+function render(){
+  chipRow(document.getElementById('modes'),
+    Object.entries(MODES).map(([k,v])=>({label:v[0],value:k})),
+    v=>v===mode, v=>{mode=v;});
+  document.getElementById('modeDesc').textContent = MODES[mode][1];
+  chipRow(document.getElementById('cats'),
+    cats.map(c=>({label:c, n:DECK.filter(d=>d.category===c).length, value:c})),
+    v=>chosenCats.has(v),
+    v=>{chosenCats.has(v)?chosenCats.delete(v):chosenCats.add(v);
+        if(!chosenCats.size) chosenCats.add(v);});
+  chipRow(document.getElementById('lens'),
+    [{label:'10',value:10},{label:'15',value:15},{label:'25',value:25},{label:'Everything',value:0}],
+    v=>v===length, v=>{length=v;});
+}
+render();
+
+// The start screen's right column is real progress, so it loads with the page.
+async function paintStart(){
+  const p = await fetch('/progress').then(r=>r.json()).catch(()=>({bindings:{},sessions:[]}));
+  const rows = Object.entries(p.bindings||{}).filter(([,v])=>v.seen);
+  const tot = rows.reduce((a,[,v])=>a+v.seen,0), hit = rows.reduce((a,[,v])=>a+v.right,0);
+  document.getElementById('sHeroAcc').innerHTML = tot
+    ? `${Math.round(hit/tot*100)}<small>%</small>`
+    : `${DECK.length}`;
+  document.getElementById('sHeroSub').textContent = tot
+    ? `lifetime accuracy · ${(p.sessions||[]).length} drills`
+    : 'bindings waiting · no drills yet';
+  const weak = rows.map(([id,v])=>({id,acc:v.right/v.seen,v}))
+    .filter(r=>r.v.seen>=2 && r.acc<0.7).sort((a,b)=>a.acc-b.acc).slice(0,3);
+  document.getElementById('dueCard').classList.toggle('hidden', !weak.length);
+  document.getElementById('dueList').innerHTML = weak.map(r=>
+    `<div class="row"><span class="what">${esc(r.id)}</span>
+     <span class="acc">${r.v.right}/${r.v.seen}</span></div>`).join('');
+}
+paintStart();
+
+/* ---------- session ---------- */
+async function startSession(pool, allowShort){
+  const prog = await fetch('/progress').then(r=>r.json()).catch(()=>({bindings:{}}));
+  let cards = pool || DECK.filter(c=>chosenCats.has(c.category));
+  if (mode==='live') {
+    const fireable = cards.filter(c=>c.live);
+    if (fireable.length >= 4) cards = fireable;
+  }
+  if (!cards.length) { alert('Pick at least one category.'); return; }
+  if (cards.length < 4 && !allowShort) {
+    alert('Pick more categories — need at least 4 bindings.'); return; }
+
+  // Weight bindings you have missed before so they come back around.
+  const weighted=[];
+  cards.forEach(c=>{
+    const p=prog.bindings?.[c.id];
+    const w = (p && p.seen && p.right/p.seen < 0.6) ? 3 : 1;
+    for(let i=0;i<w;i++) weighted.push(c);
+  });
+  shuffle(weighted);
+  const seen=new Set(); queue=[];
+  for(const c of weighted){ if(!seen.has(c.id)){seen.add(c.id);queue.push(c);} }
+  if (length) queue = queue.slice(0, length);
+
+  idx=0;right=0;streak=0;best=0;missed=[];deltas={};results=[];sessionStart=Date.now();
+  document.getElementById('qMode').textContent =
+    `${MODES[mode][0]} · ${[...chosenCats].join(', ')}`;
+  document.getElementById('railNote').textContent = mode==='live'
+    ? 'Nothing you press can fire while the drill holds the binding.'
+    : 'This mode never touches your config — no binding is suspended.';
+  show('quiz');
+  clearInterval(timer);
+  timer = setInterval(paintRail, 1000);
+  if (mode==='live') await goFullscreen();
+  nextQuestion();
+}
+
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]];}}
+function shuffled(a){a=a.slice();shuffle(a);return a;}
+
+async function goFullscreen(){
+  try{
+    await document.documentElement.requestFullscreen();
+    if (navigator.keyboard?.lock){ await navigator.keyboard.lock(); locked=true; }
+  }catch(e){/* not fatal - most combos still arrive */}
+  // Keyboard Lock is Chromium-only. Without it the browser keeps Ctrl+W,
+  // Ctrl+T, Ctrl+N and F11 for itself, and those presses never reach us -
+  // they were being scored as misses with nothing on screen to explain why.
+  document.getElementById('railNote').textContent = locked
+    ? 'Nothing you press can fire while the drill holds the binding.'
+    : 'Nothing you press can fire while the drill holds the binding — but this '
+      + 'browser keeps its own shortcuts (Ctrl+W, Ctrl+T, F11). Chromium can '
+      + 'hand those over; press Escape to skip anything it swallows.';
+}
+
+function paintRail(){
+  document.getElementById('streakN').textContent = streak;
+  document.getElementById('streakT').textContent =
+    streak ? 'in a row' : (results.length ? 'streak broken' : 'in a row');
+  document.getElementById('streakBlock').classList.toggle('neg',
+    !streak && results.length>0);
+  document.getElementById('mCorrect').textContent = `${right}/${results.length}`;
+  const s = Math.round((Date.now()-sessionStart)/1000);
+  document.getElementById('mElapsed').textContent =
+    `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  document.getElementById('runSq').innerHTML = queue.map((_,i)=>
+    `<i class="${results[i]===true?'hit':results[i]===false?'miss':''}"></i>`).join('');
+  document.getElementById('recentStrip').innerHTML = results
+    .map((ok,i)=>({ok, card:queue[i]})).slice(-3).reverse()
+    .map(r=>`<span class="u"><span class="tick ${r.ok?'y':'n'}">${r.ok?TICK:CROSS}</span>
+             <b>${esc(r.card.action)}</b></span>`).join('') || '';
+}
+
+async function nextQuestion(){
+  answered=false;
+  const v=document.getElementById('verdict');
+  v.className='verdict hidden'; v.innerHTML='';
+  if (idx >= queue.length) return endSession();
+  const card = queue[idx];
+
+  document.getElementById('counter').textContent = `${idx+1} of ${queue.length}`;
+  document.getElementById('dots').innerHTML = queue.map((_,i)=>
+    `<i class="${i<idx?'on':i===idx?'now':''}"></i>`).join('');
+  paintRail();
+
+  const wantLive = mode==='live' && card.live;
+  let armed=false;
+  if (wantLive) armed = await armCard(card);
+
+  if (armed) return askLive(card);
+  // Everything else - and any binding we could not safely unbind - is
+  // multiple choice. In quiet mode we alternate both directions.
+  const dir = mode==='recall' ? 'toAction'
+            : (mode==='quiet' && idx%2) ? 'toAction' : 'toKeys';
+  askChoice(card, dir, wantLive);
+}
+
+async function armCard(card){
+  // EVERY combo on the card has to come down, not just one. A collapsed family
+  // card carries ten combos, and accepting the card because one of them armed
+  // left the other nine live - so a "correct" press really switched workspace.
+  const combos = card.codes.map(c=>c.combo);
+  if (!combos.length) return false;
+  for (const combo of combos){
+    const r = await fetch('/arm',{method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({combo, action:card.action})})
+              .then(r=>r.json()).catch(()=>({ready:false}));
+    if (!r.ready) return false;
+  }
+  return true;
+}
+
+/* ---------- live fire ---------- */
+function askLive(card){
+  document.getElementById('heroCard').className='card hero v-center';
+  document.getElementById('qKind').textContent='Press the binding';
+  document.getElementById('qWhat').textContent=card.action;
+  document.getElementById('qHint').textContent = card.family
+    ? 'any of the number keys counts' : '';
+  document.getElementById('listen').classList.remove('hidden');
+  document.getElementById('opts').classList.add('hidden');
+}
+
+document.addEventListener('keydown', ev=>{
+  if (document.getElementById('quiz').classList.contains('hidden')) return;
+  const card = queue[idx];
+  if (!card) return;
+
+  // number keys answer a multiple-choice question
+  if (!document.getElementById('opts').classList.contains('hidden')){
+    if (answered && (ev.key==='Enter'||ev.key===' ')){ ev.preventDefault(); advance(); return; }
+    const n=parseInt(ev.key,10);
+    if (n>=1 && n<=4 && !answered){ ev.preventDefault(); pick(n-1); }
+    return;
+  }
+  if (document.getElementById('listen').classList.contains('hidden')) return;
+
+  if (answered){
+    if (ev.key==='Enter'||ev.key===' '){ ev.preventDefault(); advance(); }
+    return;
+  }
+  if (['Shift','Control','Alt','Meta','OS'].includes(ev.key)) return;
+  if (ev.code==='Escape' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey){
+    ev.preventDefault(); skip(); return;
+  }
+  ev.preventDefault();
+  const hit = card.codes.find(c=>
+    c.code===ev.code && c.super===ev.metaKey && c.ctrl===ev.ctrlKey &&
+    c.alt===ev.altKey && c.shift===ev.shiftKey);
+  if (hit) return judge(card, true, hit.combo);
+  judge(card, false, describePress(ev));
+});
+
+function describePress(ev){
+  const mods=[]; if(ev.metaKey)mods.push('SUPER'); if(ev.ctrlKey)mods.push('CTRL');
+  if(ev.altKey)mods.push('ALT'); if(ev.shiftKey)mods.push('SHIFT');
+  let k=ev.code.replace(/^Key/,'').replace(/^Digit/,'')
+        .replace('ArrowLeft','←').replace('ArrowRight','→')
+        .replace('ArrowUp','↑').replace('ArrowDown','↓');
+  return [...mods,k].join(' + ');
+}
+
+/* ---------- multiple choice ---------- */
+function askChoice(card, dir, fellBack){
+  document.getElementById('heroCard').className='card hero v-top';
+  document.getElementById('listen').classList.add('hidden');
+  const opts=document.getElementById('opts');
+  opts.classList.remove('hidden');
+  const choices = shuffled([card, ...distractors(card, 3)]);
+  card._correctIdx = choices.indexOf(card);
+  card._dir = dir;
+  card._choices = choices;
+
+  if (dir==='toKeys'){
+    document.getElementById('qKind').textContent='Which keys?';
+    document.getElementById('qWhat').textContent=card.action;
+    document.getElementById('qHint').textContent = fellBack
+      ? 'could not suspend this one safely — pick instead' : '';
+    opts.innerHTML = choices.map((c,i)=>
+      `<button class="opt" onclick="pick(${i})"><span class="num">${i+1}</span>
+       <span class="combo">${caps(displayCombo(c))}</span></button>`).join('');
+  } else {
+    document.getElementById('qKind').textContent='What does this do?';
+    document.getElementById('qWhat').innerHTML=`<span class="combo">${caps(displayCombo(card),true)}</span>`;
+    document.getElementById('qHint').textContent='';
+    opts.innerHTML = choices.map((c,i)=>
+      `<button class="opt" onclick="pick(${i})"><span class="num">${i+1}</span>
+       <span>${esc(c.action)}</span></button>`).join('');
+  }
+}
+
+// Same category first, then combos sharing a modifier set or base key, then
+// anything. Never an alias of the answer.
+function distractors(card, n){
+  const key = c => c.keys[0].split(' + ').slice(-1)[0];
+  const mods = c => c.keys[0].split(' + ').slice(0,-1).join(' ');
+  const notSame = c => c.id!==card.id && c.action!==card.action;
+  const tiers = [
+    DECK.filter(c=>notSame(c) && c.category===card.category && mods(c)===mods(card)),
+    DECK.filter(c=>notSame(c) && c.category===card.category),
+    DECK.filter(c=>notSame(c) && (mods(c)===mods(card) || key(c)===key(card))),
+    DECK.filter(notSame),
+  ];
+  const out=[], used=new Set();
+  const pressableFirst = a => shuffled(a).sort((x,y)=>
+    (y.codes.some(c=>c.code)?1:0) - (x.codes.some(c=>c.code)?1:0));
+  for (const tier of tiers){
+    for (const c of pressableFirst(tier)){
+      if (out.length>=n) break;
+      if (used.has(c.action)) continue;
+      used.add(c.action); out.push(c);
+    }
+    if (out.length>=n) break;
+  }
+  return out;
+}
+
+function pick(i){
+  if (answered) return;
+  const card=queue[idx];
+  const chosen=card._choices[i];
+  const ok = chosen.id===card.id;
+  document.querySelectorAll('.opt').forEach((el,j)=>{
+    if (j===card._correctIdx) el.classList.add('right');
+    else if (j===i && !ok) el.classList.add('wrong');
+  });
+  judge(card, ok, null, chosen);
+}
+
+/* ---------- judging ---------- */
+function judge(card, ok, pressed, chosen){
+  answered=true;
+  const d = deltas[card.id] ||= {seen:0,right:0};
+  d.seen++;
+  results[idx] = ok;
+  if (ok){ d.right++; right++; streak++; best=Math.max(best,streak); }
+  else { streak=0; d.missed_at=Date.now(); missed.push(card); }
+
+  let note='';
+  if (ok){
+    note = card.keys.length>1
+      ? `Also bound to ${card.keys.slice(1).map(k=>k.split(' + ').map(keyName).join('+')).join(', ')}.`
+      : '';
+  } else if (pressed){
+    const other = DECK.find(c=>c.keys.includes(pressed));
+    note = `It is <span class="combo">${caps(displayCombo(card))}</span>`
+         + (other ? ` &nbsp;·&nbsp; you pressed <span class="combo">${caps(pressed)}</span>,
+                     which is <strong>${esc(other.action)}</strong>` : '');
+  } else if (chosen){
+    note = card._dir==='toKeys'
+      ? `It is <span class="combo">${caps(displayCombo(card))}</span>`
+      : `It is <strong>${esc(card.action)}</strong>`;
+  }
+  const v=document.getElementById('verdict');
+  v.className = `verdict ${ok?'ok':'bad'}`;
+  v.innerHTML = `<h3>${ok?'Correct':'Missed'}</h3>`
+              + (note?`<p>${note}</p>`:'')
+              + `<div class="go-on">Enter to continue</div>`;
+  paintRail();
+  if (ok) setTimeout(()=>{ if(answered) advance(); }, 950);
+}
+
+function advance(){ idx++; nextQuestion(); }
+function skip(){
+  if(!answered){
+    const card=queue[idx];
+    missed.push(card); results[idx]=false; streak=0;
+    // A skip counted against the session score but was never written to
+    // progress.json, so a binding you skip forever looked never-seen.
+    const d = deltas[card.id] ||= {seen:0,right:0};
+    d.seen++; d.missed_at=Date.now();
+  }
+  advance();
+}
+
+/* ---------- results ---------- */
+async function endSession(){
+  clearInterval(timer);
+  await fetch('/restore',{method:'POST'}).catch(()=>{});
+  if (document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+  const asked = results.filter(r=>r!==undefined).length || queue.length;
+  const secs = Math.round((Date.now()-sessionStart)/1000);
+  await fetch('/progress',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({bindings:deltas,
+      session:{at:Date.now(),asked,right,mode,secs}})}).catch(()=>{});
+
+  document.getElementById('rScore').innerHTML = `${right}<small>/${asked}</small>`;
+  document.getElementById('rSubline').textContent =
+    `${asked?Math.round(right/asked*100):0}% · best streak ${best}`;
+  document.getElementById('rSub').textContent =
+    `Drill complete · ${MODES[mode][0]} · ${Math.floor(secs/60)}:${String(secs%60).padStart(2,'0')}`;
+
+  const uniq=[...new Map(missed.map(c=>[c.id,c])).values()];
+  document.getElementById('retryBtn').classList.toggle('hidden', !uniq.length);
+  document.getElementById('missedList').innerHTML = uniq.length
+    ? uniq.map(c=>`<div class="row"><span class="what">${esc(c.action)}</span>
+        <span class="combo">${caps(displayCombo(c))}</span></div>`).join('')
+    : '<p class="hint" style="margin:0">Nothing missed. Clean round.</p>';
+
+  const p = await fetch('/progress').then(r=>r.json()).catch(()=>({bindings:{},sessions:[]}));
+  paintBars(p, 'rBars'); paintWeak(p, 'rWeak');
+  const n = Object.values(p.bindings||{}).filter(v=>v.seen).length;
+  document.getElementById('rSeen').textContent = `${n} of ${DECK.length} bindings drilled at least once.`;
+  show('results');
+}
+function retryMissed(){
+  const uniq=[...new Map(missed.map(c=>[c.id,c])).values()];
+  // Bypasses the four-card floor: that guard exists so multiple choice has
+  // distractors to draw on, and it drew from the whole deck all along. Missing
+  // three made the retry button refuse to do anything.
+  length=0; return startSession(uniq, true);
+}
+
+/* ---------- stats ---------- */
+function paintBars(p, el){
+  const byCat={};
+  Object.entries(p.bindings||{}).filter(([,v])=>v.seen).forEach(([id,v])=>{
+    const card=DECK.find(c=>c.id===id); if(!card) return;
+    const b=byCat[card.category] ||= {seen:0,right:0};
+    b.seen+=v.seen; b.right+=v.right;
+  });
+  document.getElementById(el).innerHTML = Object.entries(byCat)
+    .sort((a,b)=>a[1].right/a[1].seen - b[1].right/b[1].seen)
+    .map(([c,v])=>{const pc=Math.round(v.right/v.seen*100);
+      const col = pc>=80?'var(--ok)':pc>=60?'var(--warn)':'var(--bad)';
+      return `<div class="barrow"><span>${esc(c)}</span>
+        <span class="track"><i style="width:${pc}%;background:${col}"></i></span>
+        <span class="pct">${pc}%</span></div>`;}).join('')
+    || '<p class="hint" style="margin:0">Nothing drilled yet.</p>';
+}
+function paintWeak(p, el){
+  document.getElementById(el).innerHTML = Object.entries(p.bindings||{})
+    .filter(([,v])=>v.seen>=2).map(([id,v])=>({id,acc:v.right/v.seen,v}))
+    .sort((a,b)=>a.acc-b.acc).slice(0,8)
+    .map(r=>{const card=DECK.find(c=>c.id===r.id);
+      return `<div class="row"><span class="what">${esc(r.id)}</span>
+        <span class="acc">${r.v.right}/${r.v.seen}</span>
+        ${card?`<span class="combo">${caps(displayCombo(card))}</span>`:''}</div>`;}).join('')
+    || '<p class="hint" style="margin:0">Drill a few rounds and the weak spots show up here.</p>';
+}
+async function showStats(){
+  const p = await fetch('/progress').then(r=>r.json()).catch(()=>({bindings:{},sessions:[]}));
+  const rows=Object.entries(p.bindings||{}).filter(([,v])=>v.seen);
+  const tot=rows.reduce((a,[,v])=>a+v.seen,0), hit=rows.reduce((a,[,v])=>a+v.right,0);
+  document.getElementById('sAcc').innerHTML = tot
+    ? `${Math.round(hit/tot*100)}<small>%</small>`
+    : '<span style="font-size:.42em;opacity:.75">no data yet</span>';
+  document.getElementById('sSess').textContent=(p.sessions||[]).length;
+  document.getElementById('sSeen').textContent=rows.length;
+  paintBars(p,'catBars'); paintWeak(p,'weakList');
+  show('stats');
+}
+async function resetProgress(){
+  if(!confirm('Erase all drill history?')) return;
+  await fetch('/progress',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({reset:true})}).catch(()=>{});
+  location.reload();
+}
+
+/* ---------- plumbing ---------- */
+function show(id){
+  ['start','quiz','results','stats'].forEach(s=>
+    document.getElementById(s).classList.toggle('hidden', s!==id));
+  if (id==='start') paintStart();
+}
+function home(){ clearInterval(timer); show('start'); }
+async function restoreNow(){
+  await fetch('/restore',{method:'POST'}).catch(()=>{});
+  suspended=[];
+  document.getElementById('banner').classList.add('hidden');
+  // Restoring under a live question puts the binding back, so the prompt has
+  // to stop asking for it: it used to sit there and the next press fired.
+  if (mode==='live' && !answered
+      && !document.getElementById('quiz').classList.contains('hidden')
+      && !document.getElementById('listen').classList.contains('hidden')){
+    const card=queue[idx];
+    if (card) askChoice(card, 'toKeys', true);
+  }
+}
+
+/* Hyprland restores every binding whenever any config file is saved, so a
+   binding can come back while its question is still on screen. The server
+   re-reads the compositor on each heartbeat and names anything that came back;
+   until this existed the banner reported the server's own bookkeeping and kept
+   claiming a binding was held after it had gone live again — and the next
+   press fired for real. That is the one failure this drill must not have. */
+async function bindingCameBack(list){
+  if (!list.length) return;
+  if (mode!=='live' || answered) return;
+  if (document.getElementById('quiz').classList.contains('hidden')) return;
+  if (document.getElementById('listen').classList.contains('hidden')) return;
+  const card = queue[idx];
+  if (!card || !card.codes.some(c=>list.includes(c.combo))) return;
+
+  // Stop listening first: from here until we know it is down again, a press
+  // would reach the real binding.
+  document.getElementById('listen').classList.add('hidden');
+  if (await armCard(card)) {
+    document.getElementById('listen').classList.remove('hidden');
+    return;
+  }
+  askChoice(card, 'toKeys', true);
+}
+
+let pingFails=0;
+setInterval(async ()=>{
+  try{
+    const r=await fetch('/ping').then(r=>r.json());
+    pingFails=0;
+    // Follow theme switches live — no reload, so a drill in progress survives.
+    if (r.palette) for (const [k,v] of Object.entries(r.palette))
+      document.documentElement.style.setProperty('--'+k, v);
+    suspended=r.suspended||[];
+    const b=document.getElementById('banner');
+    b.classList.toggle('hidden', !suspended.length);
+    document.getElementById('bannerText').textContent =
+      `${suspended.length} binding${suspended.length===1?'':'s'} suspended while you drill`;
+    await bindingCameBack(r.restored||[]);
+  }catch(e){
+    // The server restores everything and exits after 90s of silence. Saying so
+    // beats a drill that quietly stops responding.
+    if (++pingFails===4){
+      const b=document.getElementById('banner');
+      b.classList.remove('hidden');
+      document.getElementById('bannerText').textContent =
+        'Lost contact with the drill — your bindings have been restored. Relaunch to carry on.';
+    }
+  }
+}, 5000);
+
+addEventListener('beforeunload', ()=>navigator.sendBeacon('/restore'));
+</script>
+</body>
+</html>
