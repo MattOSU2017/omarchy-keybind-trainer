@@ -2,9 +2,9 @@
 # Acceptance suite for omarchy-keybind-trainer.
 #
 # Everything here runs on ANY Omarchy machine. It asserts invariants, never
-# counts or particular bindings: an earlier version checked for one machine's own
-# SUPER+Q, its own panel tile and its own count of installed themes, so the suite could
-# only ever pass on the machine it was written on.
+# counts or particular bindings: an earlier version checked for one specific
+# machine's own SUPER+Q, its own panel tile and its own count of installed
+# themes, so the suite could only ever pass where it was written.
 #
 # Safe to run any time. The mutating checks create their own scratch binding
 # and remove it again; no binding of yours is ever suspended.
