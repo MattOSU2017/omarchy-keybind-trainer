@@ -365,8 +365,17 @@ if [ "$LOCAL" = 1 ]; then
     "$(jq -r '.[]|select(.action=="Omarchy menu")|.category' "$DECK")" "System"
   chk "SUPER+Q and SUPER+W merge into one Close window card" \
     "$(jq -r '[.[]|select(.action=="Close window")|.keys[]]|sort|join(",")' "$DECK")" "SUPER + Q,SUPER + W"
-  have chezmoi && { chezmoi managed 2>/dev/null | grep -q 'omarchy_theme.py' \
-    && ok "shared theme module is chezmoi-tracked" || no "shared theme module untracked"; }
+  # Since the standalone release, install.sh owns these files and chezmoi does
+  # not. Two owners for one file is exactly the drift this suite exists to
+  # catch, so tracking them again would be the regression.
+  # Anchored on the installed target paths: chezmoi legitimately manages the
+  # run_onchange script that calls install.sh, and that name matches too.
+  have chezmoi && { chezmoi managed 2>/dev/null | grep -qE '^\.local/(bin/omarchy-keybind-trainer|lib/omarchy/omarchy_theme\.py|share/omarchy-keybind-trainer|share/applications/omarchy-keybind-trainer\.desktop)$' \
+    && no "chezmoi is tracking installer-owned files again - two owners, one file" \
+    || ok "installer-owned files are not also chezmoi-tracked"; }
+  [ -d "$HOME/.local/src/omarchy-keybind-trainer/.git" ] \
+    && ok "installed from the release clone" \
+    || no "no release clone at ~/.local/src/omarchy-keybind-trainer"
 fi
 
 echo
