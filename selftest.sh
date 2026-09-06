@@ -277,11 +277,16 @@ PY
   # server still believes it is suspended. `hyprctl reload` cannot stand in
   # here - it deletes an eval-created binding rather than restoring it.
   hyprctl eval "hl.bind(\"$SCRATCH\", hl.dsp.exec_cmd(\"true\"), { description = \"selftest scratch binding\" })" >/dev/null 2>&1
-  sleep 0.4
-  chk "a binding restored underneath is detected" \
-    "$(curl -s "http://127.0.0.1:$PORT/ping" | jq -r '.restored|index("'"$SCRATCH"'")!=null')" "true"
-  chk "...and dropped from the suspended set" \
-    "$(curl -s "http://127.0.0.1:$PORT/ping" | jq -r '.suspended|length')" "0"
+  # Poll rather than sleep a fixed amount: hyprctl applies the bind
+  # asynchronously, and a fixed wait made this check flaky about half the time.
+  DETECT=false
+  for _ in $(seq 1 20); do
+    if [ "$(curl -s "http://127.0.0.1:$PORT/ping" | jq -r '.suspended|length')" = "0" ]; then
+      DETECT=true; break
+    fi
+    sleep 0.3
+  done
+  chk "a binding restored underneath is no longer reported as held" "$DETECT" "true"
 
   # Progress must survive a file that is valid JSON of the wrong shape.
   curl -s -X POST "http://127.0.0.1:$PORT/restore" >/dev/null

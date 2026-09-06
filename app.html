@@ -939,13 +939,18 @@ async function restoreNow(){
    until this existed the banner reported the server's own bookkeeping and kept
    claiming a binding was held after it had gone live again — and the next
    press fired for real. That is the one failure this drill must not have. */
-async function bindingCameBack(list){
-  if (!list.length) return;
+async function bindingCameBack(stillHeld){
   if (mode!=='live' || answered) return;
   if (document.getElementById('quiz').classList.contains('hidden')) return;
   if (document.getElementById('listen').classList.contains('hidden')) return;
   const card = queue[idx];
-  if (!card || !card.codes.some(c=>list.includes(c.combo))) return;
+  if (!card) return;
+  // Checked against STATE, not against a "it just came back" event. The event
+  // is reported once, by whichever request first notices, so a single dropped
+  // ping used to lose it permanently and leave a live prompt on screen. Asking
+  // "is every combo I am waiting for still held?" cannot be missed that way,
+  // and it also catches an arm that silently failed.
+  if (card.codes.every(c=>stillHeld.includes(c.combo))) return;
 
   // Stop listening first: from here until we know it is down again, a press
   // would reach the real binding.
@@ -970,7 +975,7 @@ setInterval(async ()=>{
     b.classList.toggle('hidden', !suspended.length);
     document.getElementById('bannerText').textContent =
       `${suspended.length} binding${suspended.length===1?'':'s'} suspended while you drill`;
-    await bindingCameBack(r.restored||[]);
+    await bindingCameBack(suspended);
   }catch(e){
     // The server restores everything and exits after 90s of silence. Saying so
     // beats a drill that quietly stops responding.
